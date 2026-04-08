@@ -254,6 +254,15 @@ export class WhatsAppChannel implements Channel {
           const rawJid = msg.key.remoteJid;
           if (!rawJid || rawJid === 'status@broadcast') continue;
 
+          logger.info(
+            {
+              rawJid,
+              participant: msg.key.participant,
+              fromMe: msg.key.fromMe,
+            },
+            'WA message received',
+          );
+
           // Translate LID JID to phone JID if applicable.
           // Prefer senderPn from the message key (available in newer WA protocol)
           // since translateJid may fail to resolve LID→phone via signalRepository.

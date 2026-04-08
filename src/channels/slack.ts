@@ -26,33 +26,45 @@ export interface SlackChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  /** Channel name and JID prefix (default: 'slack') */
+  channelName?: string;
+  /** Env var name for the bot token (default: 'SLACK_BOT_TOKEN') */
+  botTokenEnv?: string;
+  /** Env var name for the app token (default: 'SLACK_APP_TOKEN') */
+  appTokenEnv?: string;
 }
 
 export class SlackChannel implements Channel {
-  name = 'slack';
+  name: string;
 
+  private jidPrefix: string;
   private app: App;
   private botUserId: string | undefined;
   private connected = false;
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
   private userNameCache = new Map<string, string>();
+  /** Track the latest thread_ts per channel so replies go into the thread */
+  private lastThreadTs = new Map<string, string>();
 
   private opts: SlackChannelOpts;
 
   constructor(opts: SlackChannelOpts) {
     this.opts = opts;
+    this.name = opts.channelName || 'slack';
+    this.jidPrefix = this.name;
+
+    const botTokenKey = opts.botTokenEnv || 'SLACK_BOT_TOKEN';
+    const appTokenKey = opts.appTokenEnv || 'SLACK_APP_TOKEN';
 
     // Read tokens from .env (not process.env — keeps secrets off the environment
     // so they don't leak to child processes, matching NanoClaw's security pattern)
-    const env = readEnvFile(['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN']);
-    const botToken = env.SLACK_BOT_TOKEN;
-    const appToken = env.SLACK_APP_TOKEN;
+    const env = readEnvFile([botTokenKey, appTokenKey]);
+    const botToken = env[botTokenKey];
+    const appToken = env[appTokenKey];
 
     if (!botToken || !appToken) {
-      throw new Error(
-        'SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set in .env',
-      );
+      throw new Error(`${botTokenKey} and ${appTokenKey} must be set in .env`);
     }
 
     this.app = new App({
@@ -83,19 +95,18 @@ export class SlackChannel implements Channel {
       // The agent sees them alongside channel-level messages; responses
       // always go to the channel, not back into the thread.
 
-      const jid = `slack:${msg.channel}`;
+      const jid = `${this.jidPrefix}:${msg.channel}`;
       const timestamp = new Date(parseFloat(msg.ts) * 1000).toISOString();
       const isGroup = msg.channel_type !== 'im';
 
       // Always report metadata for group discovery
-      this.opts.onChatMetadata(jid, timestamp, undefined, 'slack', isGroup);
+      this.opts.onChatMetadata(jid, timestamp, undefined, this.name, isGroup);
 
       // Only deliver full messages for registered groups
       const groups = this.opts.registeredGroups();
       if (!groups[jid]) return;
 
-      const isBotMessage =
-        !!msg.bot_id || msg.user === this.botUserId;
+      const isBotMessage = !!msg.bot_id || msg.user === this.botUserId;
 
       let senderName: string;
       if (isBotMessage) {
@@ -113,9 +124,19 @@ export class SlackChannel implements Channel {
       let content = msg.text;
       if (this.botUserId && !isBotMessage) {
         const mentionPattern = `<@${this.botUserId}>`;
-        if (content.includes(mentionPattern) && !TRIGGER_PATTERN.test(content)) {
+        if (
+          content.includes(mentionPattern) &&
+          !TRIGGER_PATTERN.test(content)
+        ) {
           content = `@${ASSISTANT_NAME} ${content}`;
         }
+      }
+
+      // Track thread context: if the message is in a thread, use its thread_ts;
+      // otherwise use the message's own ts as the thread parent for replies.
+      if (!isBotMessage) {
+        const threadTs = (msg as any).thread_ts || msg.ts;
+        this.lastThreadTs.set(jid, threadTs);
       }
 
       this.opts.onMessage(jid, {
@@ -142,10 +163,7 @@ export class SlackChannel implements Channel {
       this.botUserId = auth.user_id as string;
       logger.info({ botUserId: this.botUserId }, 'Connected to Slack');
     } catch (err) {
-      logger.warn(
-        { err },
-        'Connected to Slack but failed to get bot user ID',
-      );
+      logger.warn({ err }, 'Connected to Slack but failed to get bot user ID');
     }
 
     this.connected = true;
@@ -157,8 +175,12 @@ export class SlackChannel implements Channel {
     await this.syncChannelMetadata();
   }
 
+  private stripPrefix(jid: string): string {
+    return jid.replace(new RegExp(`^${this.jidPrefix}:`), '');
+  }
+
   async sendMessage(jid: string, text: string): Promise<void> {
-    const channelId = jid.replace(/^slack:/, '');
+    const channelId = this.stripPrefix(jid);
 
     if (!this.connected) {
       this.outgoingQueue.push({ jid, text });
@@ -170,14 +192,22 @@ export class SlackChannel implements Channel {
     }
 
     try {
+      // Reply in the same thread if we have context; otherwise post to channel
+      const threadTs = this.lastThreadTs.get(jid);
+
       // Slack limits messages to ~4000 characters; split if needed
       if (text.length <= MAX_MESSAGE_LENGTH) {
-        await this.app.client.chat.postMessage({ channel: channelId, text });
+        await this.app.client.chat.postMessage({
+          channel: channelId,
+          text,
+          thread_ts: threadTs,
+        });
       } else {
         for (let i = 0; i < text.length; i += MAX_MESSAGE_LENGTH) {
           await this.app.client.chat.postMessage({
             channel: channelId,
             text: text.slice(i, i + MAX_MESSAGE_LENGTH),
+            thread_ts: threadTs,
           });
         }
       }
@@ -196,7 +226,7 @@ export class SlackChannel implements Channel {
   }
 
   ownsJid(jid: string): boolean {
-    return jid.startsWith('slack:');
+    return jid.startsWith(`${this.jidPrefix}:`);
   }
 
   async disconnect(): Promise<void> {
@@ -231,7 +261,7 @@ export class SlackChannel implements Channel {
 
         for (const ch of result.channels || []) {
           if (ch.id && ch.name && ch.is_member) {
-            updateChatName(`slack:${ch.id}`, ch.name);
+            updateChatName(`${this.jidPrefix}:${ch.id}`, ch.name);
             count++;
           }
         }
@@ -245,9 +275,7 @@ export class SlackChannel implements Channel {
     }
   }
 
-  private async resolveUserName(
-    userId: string,
-  ): Promise<string | undefined> {
+  private async resolveUserName(userId: string): Promise<string | undefined> {
     if (!userId) return undefined;
 
     const cached = this.userNameCache.get(userId);
@@ -274,7 +302,7 @@ export class SlackChannel implements Channel {
       );
       while (this.outgoingQueue.length > 0) {
         const item = this.outgoingQueue.shift()!;
-        const channelId = item.jid.replace(/^slack:/, '');
+        const channelId = this.stripPrefix(item.jid);
         await this.app.client.chat.postMessage({
           channel: channelId,
           text: item.text,
@@ -297,4 +325,21 @@ registerChannel('slack', (opts: ChannelOpts) => {
     return null;
   }
   return new SlackChannel(opts);
+});
+
+registerChannel('slack-saruman', (opts: ChannelOpts) => {
+  const envVars = readEnvFile([
+    'SLACK_SARUMAN_BOT_TOKEN',
+    'SLACK_SARUMAN_APP_TOKEN',
+  ]);
+  if (!envVars.SLACK_SARUMAN_BOT_TOKEN || !envVars.SLACK_SARUMAN_APP_TOKEN) {
+    logger.debug('Slack (Saruman): tokens not set, skipping');
+    return null;
+  }
+  return new SlackChannel({
+    ...opts,
+    channelName: 'slack-saruman',
+    botTokenEnv: 'SLACK_SARUMAN_BOT_TOKEN',
+    appTokenEnv: 'SLACK_SARUMAN_APP_TOKEN',
+  });
 });

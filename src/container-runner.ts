@@ -25,6 +25,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { OneCLI } from '@onecli-sh/sdk';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -252,19 +253,31 @@ async function buildContainerArgs(
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
-  } else {
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
+  // Pass OAuth token directly if available — subscription tokens need
+  // Authorization: Bearer, which OneCLI's API key injection doesn't handle.
+  const envVars = readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']);
+  if (envVars.CLAUDE_CODE_OAUTH_TOKEN) {
+    args.push(
+      '-e',
+      `CLAUDE_CODE_OAUTH_TOKEN=${envVars.CLAUDE_CODE_OAUTH_TOKEN}`,
     );
+    logger.info({ containerName }, 'Injected OAuth token directly');
+  } else if (envVars.ANTHROPIC_API_KEY) {
+    // Fall back to OneCLI gateway for API key injection
+    const onecliApplied = await onecli.applyContainerConfig(args, {
+      addHostMapping: false, // Nanoclaw already handles host gateway
+      agent: agentIdentifier,
+    });
+    if (onecliApplied) {
+      logger.info({ containerName }, 'OneCLI gateway config applied');
+    } else {
+      logger.warn(
+        { containerName },
+        'OneCLI gateway not reachable — container will have no credentials',
+      );
+    }
+  } else {
+    logger.warn({ containerName }, 'No credentials found in .env');
   }
 
   // Runtime-specific args for host gateway resolution
