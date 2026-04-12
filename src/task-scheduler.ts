@@ -75,6 +75,14 @@ export interface SchedulerDependencies {
   sendMessage: (jid: string, text: string) => Promise<void>;
 }
 
+/**
+ * Derive a synthetic queue JID for tasks so they don't block the
+ * group's message queue. Messages and tasks run in parallel slots.
+ */
+function taskQueueJid(chatJid: string): string {
+  return `${chatJid}:__tasks__`;
+}
+
 async function runTask(
   task: ScheduledTask,
   deps: SchedulerDependencies,
@@ -160,12 +168,13 @@ async function runTask(
   // query loop to time out. A short delay handles any final MCP calls.
   const TASK_CLOSE_DELAY_MS = 10000;
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
+  const queueJid = taskQueueJid(task.chat_jid);
 
   const scheduleClose = () => {
     if (closeTimer) return; // already scheduled
     closeTimer = setTimeout(() => {
       logger.debug({ taskId: task.id }, 'Closing task container after result');
-      deps.queue.closeStdin(task.chat_jid);
+      deps.queue.closeStdin(queueJid);
     }, TASK_CLOSE_DELAY_MS);
   };
 
@@ -183,7 +192,7 @@ async function runTask(
         script: task.script || undefined,
       },
       (proc, containerName) =>
-        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+        deps.onProcess(queueJid, proc, containerName, task.group_folder),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
@@ -192,7 +201,7 @@ async function runTask(
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
-          deps.queue.notifyIdle(task.chat_jid);
+          deps.queue.notifyIdle(queueJid);
           scheduleClose(); // Close promptly even when result is null (e.g. IPC-only tasks)
         }
         if (streamedOutput.status === 'error') {
@@ -264,8 +273,10 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
           continue;
         }
 
-        deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>
-          runTask(currentTask, deps),
+        deps.queue.enqueueTask(
+          taskQueueJid(currentTask.chat_jid),
+          currentTask.id,
+          () => runTask(currentTask, deps),
         );
       }
     } catch (err) {
