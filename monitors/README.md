@@ -49,9 +49,29 @@ Each monitor should be 30–80 lines. Use `initMonitorState`/`getMonitorState`/`
 
 The runner skips a wake when the SHA-256 of `result.data` matches the previous wake. For per-item dedup (e.g., Reddit post IDs), store seen IDs via `updateAfterWake` and filter yourself in `check()`.
 
-## RSS monitors to add later
+## Per-install configuration
 
-Synthesia, HeyGen, Colossyan, and D-ID blogs don't expose RSS. Add scraping-based monitors (Cheerio/Playwright) when needed.
+The 5 bundled monitors target specific group folders that match the original author's workspace:
+
+| Monitor               | Target group folder |
+| --------------------- | ------------------- |
+| `reddit-keywords`     | `reddit-scout`      |
+| `prospect-pipeline`   | `prospector`        |
+| `email-responses`     | `slack_dm`          |
+| `linkedin-engagement` | `demo-clipper`      |
+| `competitor-alerts`   | `slack_dm`          |
+
+A monitor whose target group is not registered logs an `error` status ("target group not registered: …") and does not wake anything. After 3 consecutive failures, the monitor auto-disables.
+
+Before enabling a bundled monitor, either:
+
+- register the target group in NanoClaw (the agent responds to messages in that group), OR
+- edit the monitor's `config.targetGroup` to a group you have registered, OR
+- disable the monitor via `scripts/claw --monitor <name> --disable`.
+
+## RSS monitors not yet supported
+
+Synthesia, HeyGen, Colossyan, and D-ID blogs don't expose RSS. Add scraping-based monitors (Cheerio/Playwright) to cover them as the need arises.
 
 ## CLI
 

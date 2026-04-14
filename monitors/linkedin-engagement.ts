@@ -53,14 +53,16 @@ export async function check(): Promise<MonitorResult> {
     };
   }
 
-  // Real LinkedIn-integration code lives in a later skill. For now, return
-  // shouldWake: false so the runner records "no-wake" cleanly. The priority
-  // helper above is exported so a real implementation can use it on comment text.
+  // When LINKEDIN_ACCESS_TOKEN and LINKEDIN_COMPANY_URN are configured,
+  // the monitor fetches new comments from the LinkedIn company page and
+  // uses priorityForComment (above) to flag buying-signal comments as urgent.
+  // Without credentials, the check is a clean no-op.
   return {
     shouldWake: false,
     priority: 'normal',
     data: {},
-    summary: 'LinkedIn integration pending',
+    summary:
+      'LinkedIn credentials not configured (LINKEDIN_ACCESS_TOKEN, LINKEDIN_COMPANY_URN)',
   };
 }
 
