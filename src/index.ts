@@ -49,7 +49,11 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
-import { hasMonitorTriggerBypass } from './monitor-runner.js';
+import {
+  hasMonitorTriggerBypass,
+  loadMonitorConfig,
+  startMonitorLoop,
+} from './monitor-runner.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   restoreRemoteControl,
@@ -98,6 +102,30 @@ function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
       );
     },
   );
+}
+
+async function loadMonitors(): Promise<import('./monitor-types.js').Monitor[]> {
+  try {
+    // `../monitors/index.js` resolves correctly in BOTH:
+    //   dev (tsx):  src/index.ts  -> ../monitors/index.js -> <root>/monitors/index.ts
+    //   prod (node): dist/src/index.js -> ../monitors/index.js -> dist/monitors/index.js
+    // (The plan's `../../monitors/index.js` only works in prod and escapes the
+    // project root in dev — verified with URL resolution.)
+    const mod = await import('../monitors/index.js');
+    const list = (mod as { monitors?: import('./monitor-types.js').Monitor[] })
+      .monitors;
+    if (!Array.isArray(list)) {
+      logger.warn('monitors/index.js did not export a `monitors` array');
+      return [];
+    }
+    return list;
+  } catch (err) {
+    logger.info(
+      { err: String(err) },
+      'No monitors registered (monitors/index.ts not found or empty)',
+    );
+    return [];
+  }
 }
 
 function loadState(): void {
@@ -717,6 +745,22 @@ async function main(): Promise<void> {
       if (text) await channel.sendMessage(jid, text);
     },
   });
+
+  // Start the monitor runner. Monitors are pure fetch+parse+condition checks
+  // that inject synthetic messages into the target group queue when something
+  // actionable is detected.
+  const monitorGlobal = loadMonitorConfig();
+  const monitors = await loadMonitors();
+  startMonitorLoop(
+    monitors,
+    {
+      registeredGroups: () => registeredGroups,
+      channels: () => channels,
+      enqueueMonitorCheck: (chatJid) => queue.enqueueMessageCheck(chatJid),
+    },
+    monitorGlobal,
+  );
+
   startIpcWatcher({
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);
