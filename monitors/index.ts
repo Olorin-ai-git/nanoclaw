@@ -1,5 +1,5 @@
 import type { Monitor } from '../src/monitor-types.js';
 
-export const monitors: Monitor[] = [
-  // monitors are registered in later tasks
-];
+import redditKeywords from './reddit-keywords.js';
+
+export const monitors: Monitor[] = [redditKeywords];
