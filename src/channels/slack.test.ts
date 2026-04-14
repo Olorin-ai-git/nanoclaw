@@ -43,7 +43,11 @@ vi.mock('@slack/bolt', () => ({
         test: vi.fn().mockResolvedValue({ user_id: 'U_BOT_123' }),
       },
       chat: {
-        postMessage: vi.fn().mockResolvedValue(undefined),
+        postMessage: vi
+          .fn()
+          .mockResolvedValue({ ts: '1704067300.000000', ok: true }),
+        update: vi.fn().mockResolvedValue({ ok: true }),
+        delete: vi.fn().mockResolvedValue({ ok: true }),
       },
       conversations: {
         list: vi.fn().mockResolvedValue({
@@ -768,24 +772,118 @@ describe('SlackChannel', () => {
 
   // --- setTyping ---
 
-  describe('setTyping', () => {
-    it('resolves without error (no-op)', async () => {
+  describe('setTyping (thinking-placeholder)', () => {
+    it('is a no-op before connect', async () => {
       const opts = createTestOpts();
       const channel = new SlackChannel(opts);
 
-      // Should not throw — Slack has no bot typing indicator API
-      await expect(
-        channel.setTyping('slack:C0123456789', true),
-      ).resolves.toBeUndefined();
+      await channel.setTyping('slack:C0123456789', true);
+      await channel.setTyping('slack:C0123456789', false);
+
+      expect(currentApp().client.chat.postMessage).not.toHaveBeenCalled();
+      expect(currentApp().client.chat.delete).not.toHaveBeenCalled();
     });
 
-    it('accepts false without error', async () => {
+    it('setTyping(true) posts a thinking placeholder', async () => {
       const opts = createTestOpts();
       const channel = new SlackChannel(opts);
+      await channel.connect();
 
-      await expect(
-        channel.setTyping('slack:C0123456789', false),
-      ).resolves.toBeUndefined();
+      await channel.setTyping('slack:C0123456789', true);
+
+      expect(currentApp().client.chat.postMessage).toHaveBeenCalledWith({
+        channel: 'C0123456789',
+        text: '💭 _thinking…_',
+        thread_ts: undefined,
+      });
+    });
+
+    it('setTyping(true) twice does not post twice (idempotent while pending)', async () => {
+      const opts = createTestOpts();
+      const channel = new SlackChannel(opts);
+      await channel.connect();
+
+      await channel.setTyping('slack:C0123456789', true);
+      await channel.setTyping('slack:C0123456789', true);
+
+      expect(currentApp().client.chat.postMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('sendMessage after setTyping(true) edits the placeholder via chat.update', async () => {
+      const opts = createTestOpts();
+      const channel = new SlackChannel(opts);
+      await channel.connect();
+
+      await channel.setTyping('slack:C0123456789', true);
+      await channel.sendMessage('slack:C0123456789', 'Real reply');
+
+      expect(currentApp().client.chat.update).toHaveBeenCalledWith({
+        channel: 'C0123456789',
+        ts: '1704067300.000000',
+        text: 'Real reply',
+      });
+      // postMessage was called once for the placeholder, not for the reply.
+      expect(currentApp().client.chat.postMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('long message after setTyping(true): first chunk updates placeholder, rest post', async () => {
+      const opts = createTestOpts();
+      const channel = new SlackChannel(opts);
+      await channel.connect();
+
+      await channel.setTyping('slack:C0123456789', true);
+      await channel.sendMessage('slack:C0123456789', 'A'.repeat(4500));
+
+      expect(currentApp().client.chat.update).toHaveBeenCalledTimes(1);
+      expect(currentApp().client.chat.update).toHaveBeenCalledWith({
+        channel: 'C0123456789',
+        ts: '1704067300.000000',
+        text: 'A'.repeat(4000),
+      });
+      // postMessage: 1 for placeholder + 1 for remaining chunk = 2
+      expect(currentApp().client.chat.postMessage).toHaveBeenCalledTimes(2);
+      expect(currentApp().client.chat.postMessage).toHaveBeenLastCalledWith({
+        channel: 'C0123456789',
+        text: 'A'.repeat(500),
+        thread_ts: undefined,
+      });
+    });
+
+    it('setTyping(false) deletes placeholder when no message was sent', async () => {
+      const opts = createTestOpts();
+      const channel = new SlackChannel(opts);
+      await channel.connect();
+
+      await channel.setTyping('slack:C0123456789', true);
+      await channel.setTyping('slack:C0123456789', false);
+
+      expect(currentApp().client.chat.delete).toHaveBeenCalledWith({
+        channel: 'C0123456789',
+        ts: '1704067300.000000',
+      });
+    });
+
+    it('setTyping(false) after sendMessage is a no-op (placeholder consumed)', async () => {
+      const opts = createTestOpts();
+      const channel = new SlackChannel(opts);
+      await channel.connect();
+
+      await channel.setTyping('slack:C0123456789', true);
+      await channel.sendMessage('slack:C0123456789', 'Reply');
+      await channel.setTyping('slack:C0123456789', false);
+
+      expect(currentApp().client.chat.delete).not.toHaveBeenCalled();
+    });
+
+    it('sendMessage without prior setTyping(true) posts normally (no chat.update)', async () => {
+      const opts = createTestOpts();
+      const channel = new SlackChannel(opts);
+      await channel.connect();
+
+      await channel.sendMessage('slack:C0123456789', 'Direct reply');
+
+      expect(currentApp().client.chat.update).not.toHaveBeenCalled();
+      expect(currentApp().client.chat.postMessage).toHaveBeenCalledTimes(1);
     });
   });
 

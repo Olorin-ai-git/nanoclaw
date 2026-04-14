@@ -17,6 +17,10 @@ import {
 // Messages exceeding this are split into sequential chunks.
 const MAX_MESSAGE_LENGTH = 4000;
 
+// Placeholder text posted while the agent is processing. The first sendMessage
+// edits this message into the real reply via chat.update.
+const THINKING_PLACEHOLDER_TEXT = '💭 _thinking…_';
+
 // The message subtypes we process. Bolt delivers all subtypes via app.event('message');
 // we filter to regular messages (GenericMessageEvent, subtype undefined) and bot messages
 // (BotMessageEvent, subtype 'bot_message') so we can track our own output.
@@ -46,6 +50,14 @@ export class SlackChannel implements Channel {
   private userNameCache = new Map<string, string>();
   /** Track the latest thread_ts per channel so replies go into the thread */
   private lastThreadTs = new Map<string, string>();
+  /**
+   * Per-JID pending "thinking..." placeholder messages. Posted on setTyping(true),
+   * consumed by the first sendMessage (via chat.update) or deleted by setTyping(false).
+   */
+  private pendingPlaceholders = new Map<
+    string,
+    { channel: string; ts: string }
+  >();
 
   private opts: SlackChannelOpts;
 
@@ -213,15 +225,47 @@ export class SlackChannel implements Channel {
       // Otherwise use tracked thread context from the last inbound message.
       const threadTs = jidThreadTs || this.lastThreadTs.get(jid);
 
+      // Consume a pending "thinking..." placeholder exactly once. If present,
+      // the first message chunk edits it via chat.update; subsequent chunks
+      // (and any later sendMessage calls) post new messages as before.
+      const placeholder = this.pendingPlaceholders.get(jid);
+      if (placeholder) this.pendingPlaceholders.delete(jid);
+
       // Slack limits messages to ~4000 characters; split if needed
       if (text.length <= MAX_MESSAGE_LENGTH) {
-        await this.app.client.chat.postMessage({
-          channel: channelId,
-          text,
-          thread_ts: threadTs,
-        });
+        if (placeholder) {
+          await this.app.client.chat.update({
+            channel: placeholder.channel,
+            ts: placeholder.ts,
+            text,
+          });
+        } else {
+          await this.app.client.chat.postMessage({
+            channel: channelId,
+            text,
+            thread_ts: threadTs,
+          });
+        }
       } else {
-        for (let i = 0; i < text.length; i += MAX_MESSAGE_LENGTH) {
+        const firstChunk = text.slice(0, MAX_MESSAGE_LENGTH);
+        if (placeholder) {
+          await this.app.client.chat.update({
+            channel: placeholder.channel,
+            ts: placeholder.ts,
+            text: firstChunk,
+          });
+        } else {
+          await this.app.client.chat.postMessage({
+            channel: channelId,
+            text: firstChunk,
+            thread_ts: threadTs,
+          });
+        }
+        for (
+          let i = MAX_MESSAGE_LENGTH;
+          i < text.length;
+          i += MAX_MESSAGE_LENGTH
+        ) {
           await this.app.client.chat.postMessage({
             channel: channelId,
             text: text.slice(i, i + MAX_MESSAGE_LENGTH),
@@ -252,11 +296,52 @@ export class SlackChannel implements Channel {
     await this.app.stop();
   }
 
-  // Slack does not expose a typing indicator API for bots.
-  // This no-op satisfies the Channel interface so the orchestrator
-  // doesn't need channel-specific branching.
-  async setTyping(_jid: string, _isTyping: boolean): Promise<void> {
-    // no-op: Slack Bot API has no typing indicator endpoint
+  // Slack has no real-time typing indicator for bots, so we simulate one by
+  // posting a "thinking..." placeholder message when the orchestrator starts
+  // processing and editing it into the real reply on the first sendMessage.
+  // If no reply is produced, the placeholder is deleted on setTyping(false).
+  async setTyping(jid: string, isTyping: boolean): Promise<void> {
+    if (!this.connected) return;
+    const { channelId, threadTs: jidThreadTs } = this.parseJid(jid);
+    const threadTs = jidThreadTs ?? this.lastThreadTs.get(jid);
+
+    if (isTyping) {
+      if (this.pendingPlaceholders.has(jid)) return; // one placeholder per JID
+      try {
+        const res = await this.app.client.chat.postMessage({
+          channel: channelId,
+          text: THINKING_PLACEHOLDER_TEXT,
+          thread_ts: threadTs,
+        });
+        if (res.ts) {
+          this.pendingPlaceholders.set(jid, { channel: channelId, ts: res.ts });
+        }
+      } catch (err) {
+        // Non-fatal: the agent will still respond via a normal postMessage.
+        logger.debug(
+          { jid, err },
+          'Slack thinking placeholder post failed (non-fatal)',
+        );
+      }
+      return;
+    }
+
+    // isTyping === false: if the placeholder wasn't consumed by sendMessage
+    // (e.g. the agent produced no output), delete it so the channel stays clean.
+    const placeholder = this.pendingPlaceholders.get(jid);
+    if (!placeholder) return;
+    this.pendingPlaceholders.delete(jid);
+    try {
+      await this.app.client.chat.delete({
+        channel: placeholder.channel,
+        ts: placeholder.ts,
+      });
+    } catch (err) {
+      logger.debug(
+        { jid, err },
+        'Slack thinking placeholder delete failed (non-fatal)',
+      );
+    }
   }
 
   /**
