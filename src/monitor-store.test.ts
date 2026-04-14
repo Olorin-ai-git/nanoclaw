@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { _initTestDatabase } from './db.js';
 import {
   autoDisableMonitor,
+  getAllMonitorStates,
   getMonitorHistory,
   getMonitorState,
   initMonitorState,
@@ -91,10 +92,14 @@ describe('monitor-store', () => {
 
   it('autoDisableMonitor sets enabled=false and records reason', () => {
     initMonitorState('m', true);
+    recordFailure('m');
+    recordFailure('m');
+    recordFailure('m');
     autoDisableMonitor('m', 'Network unreachable');
     const state = getMonitorState('m')!;
     expect(state.enabled).toBe(false);
     expect(state.auto_disabled_reason).toBe('Network unreachable');
+    expect(state.consecutive_failures).toBe(0);
   });
 
   it('logMonitorRun and getMonitorHistory round-trip rows (newest first)', () => {
@@ -140,5 +145,22 @@ describe('monitor-store', () => {
       });
     }
     expect(getMonitorHistory('m', 5)).toHaveLength(5);
+  });
+
+  it('getAllMonitorStates returns all monitors in alphabetical order', () => {
+    initMonitorState('zeta', true);
+    initMonitorState('alpha', false);
+    initMonitorState('mike', true);
+    const all = getAllMonitorStates();
+    expect(all.map((s) => s.name)).toEqual(['alpha', 'mike', 'zeta']);
+    expect(all[0].enabled).toBe(false);
+    expect(all[1].enabled).toBe(true);
+  });
+
+  it('recordFailure returns the new failure count', () => {
+    initMonitorState('m', true);
+    expect(recordFailure('m')).toBe(1);
+    expect(recordFailure('m')).toBe(2);
+    expect(recordFailure('m')).toBe(3);
   });
 });

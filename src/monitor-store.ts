@@ -1,5 +1,3 @@
-import Database from 'better-sqlite3';
-
 import { getDb } from './db.js';
 import { logger } from './logger.js';
 
@@ -208,6 +206,3 @@ export function getMonitorHistory(
     error: r.error,
   }));
 }
-
-// Re-export type so Database binding is available where needed
-export type { Database };
