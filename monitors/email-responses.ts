@@ -1,7 +1,7 @@
 import {
   getMonitorState,
   initMonitorState,
-  updateAfterWake,
+  updateSeenIds,
 } from '../src/monitor-store.js';
 import type {
   Monitor,
@@ -118,7 +118,7 @@ export async function check(): Promise<MonitorResult> {
       (e) => `${e.email.id}:${e.event}:${e.email.last_event_at ?? ''}`,
     ),
   ];
-  updateAfterWake(config.name, new Date().toISOString(), '', newIds);
+  updateSeenIds(config.name, newIds);
 
   return {
     shouldWake: true,

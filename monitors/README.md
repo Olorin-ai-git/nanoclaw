@@ -37,7 +37,7 @@ Monitors are lightweight pollers that watch external sources and wake agents whe
 
 ## Keep monitors small
 
-Each monitor should be 30–80 lines. Use `initMonitorState`/`getMonitorState`/`updateAfterWake` for per-monitor state (seen IDs, last hash). Do not store monitor state in files.
+Each monitor should be 30–80 lines. Use `initMonitorState` + `getMonitorState` to read per-monitor state, and `updateSeenIds` to persist seen IDs during `check()`. The runner handles writing `last_wake`, `last_data_hash`, and `last_run` itself via `updateAfterWake` — monitors should not touch those. Do not store monitor state in files.
 
 ## Priority semantics
 
@@ -47,7 +47,7 @@ Each monitor should be 30–80 lines. Use `initMonitorState`/`getMonitorState`/`
 
 ## Deduplication
 
-The runner skips a wake when the SHA-256 of `result.data` matches the previous wake. For per-item dedup (e.g., Reddit post IDs), store seen IDs via `updateAfterWake` and filter yourself in `check()`.
+The runner skips a wake when the SHA-256 of `result.data` matches the previous wake. For per-item dedup (e.g., Reddit post IDs), store seen IDs via `updateSeenIds` and filter yourself in `check()`.
 
 ## Per-install configuration
 

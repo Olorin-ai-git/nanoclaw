@@ -122,6 +122,21 @@ export function updateAfterWake(
   ).run(wakeAt, dataHash, JSON.stringify(capped), name);
 }
 
+/**
+ * Persist only the seen_ids list for a monitor (caps at SEEN_IDS_CAP entries,
+ * oldest dropped first). Does NOT touch last_wake, last_data_hash, or last_run.
+ * Use this from inside a monitor's `check()` to dedup items across runs.
+ * The runner's own `updateAfterWake` call persists the wake metadata separately.
+ */
+export function updateSeenIds(name: string, seenIds: string[]): void {
+  const capped = seenIds.slice(-SEEN_IDS_CAP);
+  const db = getDb();
+  db.prepare(`UPDATE monitor_state SET seen_ids = ? WHERE name = ?`).run(
+    JSON.stringify(capped),
+    name,
+  );
+}
+
 export function recordFailure(name: string): number {
   const db = getDb();
   const result = db

@@ -2,7 +2,7 @@ import { logger } from '../src/logger.js';
 import {
   getMonitorState,
   initMonitorState,
-  updateAfterWake,
+  updateSeenIds,
 } from '../src/monitor-store.js';
 import type { Monitor, MonitorResult } from '../src/monitor-types.js';
 
@@ -102,7 +102,7 @@ export async function check(): Promise<MonitorResult> {
   // Take the first (newest) hit.
   const [first] = hits;
   const allIds = [...state.seen_ids, ...hits.map((h) => h.post.id)];
-  updateAfterWake(config.name, new Date().toISOString(), '', allIds);
+  updateSeenIds(config.name, allIds);
 
   logger.debug(
     { hits: hits.length, first: first.post.id },

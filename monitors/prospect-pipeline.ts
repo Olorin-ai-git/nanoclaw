@@ -5,7 +5,7 @@ import { GROUPS_DIR } from '../src/config.js';
 import {
   getMonitorState,
   initMonitorState,
-  updateAfterWake,
+  updateSeenIds,
 } from '../src/monitor-store.js';
 import type { Monitor, MonitorResult } from '../src/monitor-types.js';
 
@@ -97,7 +97,7 @@ export async function check(): Promise<MonitorResult> {
   }
 
   const newIds = [...state.seen_ids, alertKey];
-  updateAfterWake(config.name, new Date().toISOString(), '', newIds);
+  updateSeenIds(config.name, newIds);
 
   return {
     shouldWake: true,

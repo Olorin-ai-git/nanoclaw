@@ -2,7 +2,7 @@ import { logger } from '../src/logger.js';
 import {
   getMonitorState,
   initMonitorState,
-  updateAfterWake,
+  updateSeenIds,
 } from '../src/monitor-store.js';
 import type { Monitor, MonitorResult } from '../src/monitor-types.js';
 
@@ -144,7 +144,7 @@ export async function check(): Promise<MonitorResult> {
     ...state.seen_ids,
     ...hits.map((h) => `${h.feed.source}:${h.item.id}`),
   ];
-  updateAfterWake(config.name, new Date().toISOString(), '', newIds);
+  updateSeenIds(config.name, newIds);
 
   return {
     shouldWake: true,

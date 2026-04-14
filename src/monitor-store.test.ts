@@ -13,6 +13,7 @@ import {
   setMonitorEnabled,
   updateAfterRun,
   updateAfterWake,
+  updateSeenIds,
 } from './monitor-store.js';
 
 beforeEach(() => {
@@ -162,5 +163,26 @@ describe('monitor-store', () => {
     expect(recordFailure('m')).toBe(1);
     expect(recordFailure('m')).toBe(2);
     expect(recordFailure('m')).toBe(3);
+  });
+
+  it('updateSeenIds writes only seen_ids and leaves wake metadata untouched', () => {
+    initMonitorState('m', true);
+    const wakeTs = '2026-04-13T10:00:00.000Z';
+    updateAfterWake('m', wakeTs, 'hash-abc', ['a', 'b']);
+    updateSeenIds('m', ['a', 'b', 'c']);
+    const state = getMonitorState('m')!;
+    expect(state.seen_ids).toEqual(['a', 'b', 'c']);
+    expect(state.last_wake).toBe(wakeTs);
+    expect(state.last_data_hash).toBe('hash-abc');
+  });
+
+  it('updateSeenIds caps at 500 entries (oldest first dropped)', () => {
+    initMonitorState('m', true);
+    const ids = Array.from({ length: 600 }, (_, i) => `id-${i}`);
+    updateSeenIds('m', ids);
+    const stored = getMonitorState('m')!.seen_ids;
+    expect(stored).toHaveLength(500);
+    expect(stored[0]).toBe('id-100');
+    expect(stored[499]).toBe('id-599');
   });
 });
