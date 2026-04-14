@@ -90,7 +90,7 @@ function setupLaunchd(
     <key>ProgramArguments</key>
     <array>
         <string>${nodePath}</string>
-        <string>${projectRoot}/dist/index.js</string>
+        <string>${projectRoot}/dist/src/index.js</string>
     </array>
     <key>WorkingDirectory</key>
     <string>${projectRoot}</string>
@@ -165,7 +165,7 @@ function setupLinux(
  */
 function killOrphanedProcesses(projectRoot: string): void {
   try {
-    execSync(`pkill -f '${projectRoot}/dist/index\\.js' || true`, {
+    execSync(`pkill -f '${projectRoot}/dist/src/index\\.js' || true`, {
       stdio: 'ignore',
     });
     logger.info('Stopped any orphaned nanoclaw processes');
@@ -239,7 +239,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${nodePath} ${projectRoot}/dist/index.js
+ExecStart=${nodePath} ${projectRoot}/dist/src/index.js
 WorkingDirectory=${projectRoot}
 Restart=always
 RestartSec=5
@@ -351,7 +351,7 @@ function setupNohupFallback(
     'fi',
     '',
     'echo "Starting NanoClaw..."',
-    `nohup ${JSON.stringify(nodePath)} ${JSON.stringify(projectRoot + '/dist/index.js')} \\`,
+    `nohup ${JSON.stringify(nodePath)} ${JSON.stringify(projectRoot + '/dist/src/index.js')} \\`,
     `  >> ${JSON.stringify(projectRoot + '/logs/nanoclaw.log')} \\`,
     `  2>> ${JSON.stringify(projectRoot + '/logs/nanoclaw.error.log')} &`,
     '',
