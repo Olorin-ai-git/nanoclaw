@@ -971,7 +971,7 @@ export function isBusinessHours(
 - [ ] **Step 2: Run tests to verify they pass**
 
 Run: `cd /Users/olorin/nanoclaw && npx vitest run src/quiet-hours.test.ts`
-Expected: all 13 tests PASS.
+Expected: all 16 tests PASS.
 
 - [ ] **Step 3: Run typecheck**
 
@@ -1610,12 +1610,19 @@ function checkTimingGates(
   return { allowed: true, reason: 'ok' };
 }
 
+type WithTimeoutResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; timedOut: true }
+  | { ok: false; err: unknown };
+
 function withTimeout<T>(
   p: Promise<T>,
   ms: number,
-): Promise<{ ok: true; value: T } | { ok: false; timedOut: true }> {
+): Promise<WithTimeoutResult<T>> {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ ok: false, timedOut: true }), ms);
+    const timer = setTimeout(() => {
+      resolve({ ok: false, timedOut: true });
+    }, ms);
     p.then(
       (value) => {
         clearTimeout(timer);
@@ -1623,14 +1630,9 @@ function withTimeout<T>(
       },
       (err) => {
         clearTimeout(timer);
-        // Re-throw via rejection path.
-        throw err;
+        resolve({ ok: false, err });
       },
-    ).catch((err) => {
-      clearTimeout(timer);
-      // Propagate rejection — caller handles it.
-      throw err;
-    });
+    );
   });
 }
 
@@ -1703,10 +1705,9 @@ export async function runMonitorOnce(
   const started = Date.now();
   let result: MonitorResult;
   try {
-    const timed = await withTimeout(monitor.check(), CHECK_TIMEOUT_MS).catch(
-      (err: unknown) => ({ ok: false as const, err }),
-    );
-    if ('timedOut' in timed && timed.timedOut) {
+    const timed = await withTimeout(monitor.check(), CHECK_TIMEOUT_MS);
+
+    if (!timed.ok && 'timedOut' in timed) {
       logMonitorRun({
         monitor_name: name,
         run_at: runAt,
@@ -1735,10 +1736,13 @@ export async function runMonitorOnce(
       updateAfterRun(name, runAt);
       return;
     }
-    if ('err' in timed) {
+
+    if (!timed.ok) {
+      const errMsg =
+        timed.err instanceof Error ? timed.err.message : String(timed.err);
       await handleCheckFailure(
         monitor,
-        timed.err,
+        errMsg,
         runAt,
         Date.now() - started,
         deps,
@@ -1746,6 +1750,7 @@ export async function runMonitorOnce(
       updateAfterRun(name, runAt);
       return;
     }
+
     result = timed.value;
   } catch (err) {
     await handleCheckFailure(monitor, err, runAt, Date.now() - started, deps);
@@ -1978,7 +1983,7 @@ export function _resetMonitorLoopForTests(): void {
 - [ ] **Step 2: Run monitor-runner tests to verify they pass**
 
 Run: `cd /Users/olorin/nanoclaw && npx vitest run src/monitor-runner.test.ts`
-Expected: all 12 tests PASS.
+Expected: all 17 tests PASS.
 
 - [ ] **Step 3: Run full test suite**
 
@@ -2214,9 +2219,10 @@ Still in `/Users/olorin/nanoclaw/src/index.ts`, add this function somewhere near
 ```typescript
 async function loadMonitors(): Promise<import('./monitor-types.js').Monitor[]> {
   try {
-    // Path works in both dev (tsx: src/../monitors/index.ts) and
-    // prod (dist/src/../monitors/index.js).
-    const mod = await import('../../monitors/index.js');
+    // `../monitors/index.js` resolves correctly in BOTH:
+    //   dev (tsx):  src/index.ts  -> ../monitors/index.js -> <root>/monitors/index.ts
+    //   prod (node): dist/src/index.js -> ../monitors/index.js -> dist/monitors/index.js
+    const mod = await import('../monitors/index.js');
     const list = (mod as { monitors?: import('./monitor-types.js').Monitor[] })
       .monitors;
     if (!Array.isArray(list)) {
@@ -2234,12 +2240,7 @@ async function loadMonitors(): Promise<import('./monitor-types.js').Monitor[]> {
 }
 ```
 
-Note: the path `'../../monitors/index.js'` resolves as follows —
-
-- Dev (tsx): `src/index.ts` → `../../monitors/index.js` → `monitors/index.ts` (tsx rewrites .js to .ts)
-- Prod: `dist/src/index.js` → `../../monitors/index.js` → `dist/monitors/index.js`
-
-Both are valid because the tsconfig (Task 1) includes `monitors/**/*` in the output.
+Note: the path `'../monitors/index.js'` resolves correctly in both dev and prod because of how Node's module resolution works with the output structure. The tsconfig (Task 1) includes `monitors/**/*` in the output, placing monitors at the project root in both dev (source) and prod (dist).
 
 - [ ] **Step 3: Wire the loop into `main()`**
 
