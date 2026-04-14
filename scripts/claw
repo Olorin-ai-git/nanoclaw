@@ -378,6 +378,16 @@ def main():
     parser.add_argument("--list-groups", action="store_true", help="List registered groups and exit")
     parser.add_argument("--monitors", action="store_true",
                         help="List all monitors and their current state")
+    parser.add_argument("--monitor", metavar="NAME",
+                        help="Target a specific monitor for --enable/--disable/--run-now/--history")
+    parser.add_argument("--enable", action="store_true",
+                        help="Enable the monitor named by --monitor")
+    parser.add_argument("--disable", action="store_true",
+                        help="Disable the monitor named by --monitor")
+    parser.add_argument("--run-now", action="store_true",
+                        help="Fire the monitor named by --monitor immediately (via tsx)")
+    parser.add_argument("--history", action="store_true",
+                        help="Show last 10 runs of the monitor named by --monitor")
     parser.add_argument("--raw", action="store_true", help="Print raw JSON output")
     parser.add_argument("--timeout", type=int, default=300, metavar="SECS",
                         help="Max seconds to wait for a response (default: 300)")
@@ -416,6 +426,20 @@ def main():
                 f"{(s['last_wake'] or '-')[:22]:<22} "
                 f"{s['consecutive_failures']:<4}{tag}"
             )
+        return
+
+    if args.monitor and (args.enable or args.disable):
+        if args.enable and args.disable:
+            sys.exit("error: pass only one of --enable or --disable.")
+        enabled = bool(args.enable)
+        changed = set_monitor_enabled_in_db(DB_PATH, args.monitor, enabled)
+        if not changed:
+            sys.exit(
+                f"error: monitor '{args.monitor}' not found in DB. "
+                f"Has NanoClaw started yet?"
+            )
+        verb = "enabled" if enabled else "disabled"
+        print(f"Monitor '{args.monitor}' {verb}.")
         return
 
     # Resolve prompt: --pipe reads stdin, optionally prepended with positional arg
