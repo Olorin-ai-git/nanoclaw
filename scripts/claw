@@ -443,7 +443,14 @@ def main():
         return
 
     if args.monitor and args.run_now:
-        cmd = ["npx", "tsx", str(NANOCLAW_DIR / "scripts" / "run-monitor.ts"), args.monitor]
+        # Use node_modules/.bin/tsx directly. `npx tsx` is unreliable because
+        # npx resolves "tsx" as an npm script name before checking node_modules.
+        tsx_bin = NANOCLAW_DIR / "node_modules" / ".bin" / "tsx"
+        if not tsx_bin.exists():
+            sys.exit(
+                f"error: tsx not found at {tsx_bin}. Run `npm install` in {NANOCLAW_DIR} first."
+            )
+        cmd = [str(tsx_bin), str(NANOCLAW_DIR / "scripts" / "run-monitor.ts"), args.monitor]
         dbg(f"run-now: {' '.join(cmd)}")
         result = subprocess.run(cmd, cwd=NANOCLAW_DIR)
         sys.exit(result.returncode)
