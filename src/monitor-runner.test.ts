@@ -16,6 +16,7 @@ import type {
   Monitor,
   MonitorDependencies,
   MonitorGlobalConfig,
+  MonitorResult,
 } from './monitor-types.js';
 import type { Channel } from './types.js';
 
@@ -342,7 +343,13 @@ describe('runMonitorOnce', () => {
         targetGroup: 'reddit-scout',
         enabled: true,
       },
-      check: () => new Promise((resolve) => setTimeout(resolve, 60_000)),
+      // This check never resolves within the 30s timeout window; the
+      // `resolve` binding is only invoked by the pending setTimeout at
+      // 60s, which the timeout path preempts.
+      check: () =>
+        new Promise<MonitorResult>((resolve) =>
+          setTimeout(() => resolve({} as MonitorResult), 60_000),
+        ),
     };
     const now = new Date('2026-04-13T15:00:00.000Z');
 

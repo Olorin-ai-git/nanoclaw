@@ -188,10 +188,12 @@ export function getMonitorHistory(
   const db = getDb();
   const rows = db
     .prepare(
+      // Secondary sort by id DESC so rows inserted in the same millisecond
+      // still come back in insertion order (most recent first).
       `SELECT monitor_name, run_at, duration_ms, status, woke_agent, priority, summary, error
        FROM monitor_run_logs
        WHERE monitor_name = ?
-       ORDER BY run_at DESC
+       ORDER BY run_at DESC, id DESC
        LIMIT ?`,
     )
     .all(name, limit) as RawLogRow[];
