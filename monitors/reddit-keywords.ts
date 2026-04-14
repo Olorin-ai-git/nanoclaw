@@ -10,6 +10,7 @@ const SUBREDDITS = 'elearning+instructionaldesign+edtech+corporatetraining';
 const FEED_URL = `https://www.reddit.com/r/${SUBREDDITS}/new.json?limit=50`;
 const MAX_AGE_HOURS = 4;
 const USER_AGENT = 'nanoclaw-monitor/1.0';
+const FETCH_TIMEOUT_MS = 25_000;
 
 const KEYWORDS = [
   'interactive video',
@@ -52,6 +53,7 @@ function matchKeyword(text: string): string | null {
 async function fetchFeed(): Promise<RedditPost[]> {
   const res = await fetch(FEED_URL, {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`Reddit ${res.status}: ${res.statusText}`);

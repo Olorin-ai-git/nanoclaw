@@ -11,6 +11,7 @@ import type {
 import { readEnvFile } from '../src/env.js';
 
 const RESEND_EMAILS_URL = 'https://api.resend.com/emails';
+const FETCH_TIMEOUT_MS = 25_000;
 
 interface ResendEmail {
   id: string;
@@ -69,6 +70,7 @@ export async function check(): Promise<MonitorResult> {
 
   const res = await fetch(RESEND_EMAILS_URL, {
     headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`Resend ${res.status}: ${res.statusText}`);

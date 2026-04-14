@@ -28,6 +28,7 @@ const KEYWORDS = [
 ];
 
 const MAX_AGE_HOURS = 24;
+const FETCH_TIMEOUT_MS = 25_000;
 
 interface FeedItem {
   id: string;
@@ -87,6 +88,7 @@ async function fetchFeed(feed: Feed): Promise<FeedItem[]> {
       'User-Agent': 'nanoclaw-monitor/1.0',
       Accept: 'application/rss+xml',
     },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`${feed.source} ${res.status}: ${res.statusText}`);
