@@ -731,7 +731,14 @@ async function main(): Promise<void> {
           return;
         }
       }
-      storeMessage(msg);
+      try {
+        storeMessage(msg);
+      } catch (err) {
+        logger.warn(
+          { err, sender: msg.sender, chatJid },
+          'onMessage: refusing to store message (sender rejected by storeMessage guard)',
+        );
+      }
     },
     onChatMetadata: (
       chatJid: string,
