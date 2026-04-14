@@ -82,6 +82,31 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+
+    CREATE TABLE IF NOT EXISTS monitor_state (
+      name TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      last_run TEXT,
+      last_wake TEXT,
+      last_data_hash TEXT,
+      seen_ids TEXT,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      auto_disabled_reason TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS monitor_run_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      monitor_name TEXT NOT NULL,
+      run_at TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      woke_agent INTEGER NOT NULL DEFAULT 0,
+      priority TEXT,
+      summary TEXT,
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitor_run_logs
+      ON monitor_run_logs(monitor_name, run_at DESC);
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
