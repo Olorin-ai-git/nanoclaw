@@ -109,7 +109,6 @@ export async function injectMonitorMessage(
   const dataJson = JSON.stringify(result.data, null, 2);
   const content = `[MONITOR: ${monitorName}] ${result.summary}\n\nData:\n${dataJson}`;
 
-  const nonce = Math.random().toString(36).slice(2, 8);
   const timestamp = new Date().toISOString();
 
   // Ensure the chat row exists — storeMessage has a FK on chat_jid → chats.jid.
@@ -118,7 +117,7 @@ export async function injectMonitorMessage(
   storeChatMetadata(chatJid, timestamp);
 
   const msg: NewMessage = {
-    id: `monitor-${monitorName}-${Date.now()}-${nonce}`,
+    id: `monitor-${monitorName}-${crypto.randomUUID()}`,
     chat_jid: chatJid,
     sender: `${MONITOR_SENDER_PREFIX}${monitorName}`,
     sender_name: `Monitor (${monitorName})`,
@@ -224,6 +223,27 @@ function withTimeout<T>(
   });
 }
 
+async function maybeNotifyAutoDisable(
+  name: string,
+  failures: number,
+  reason: string,
+  deps: MonitorDependencies,
+): Promise<void> {
+  if (failures < FAILURE_LIMIT) return;
+  autoDisableMonitor(name, reason);
+  try {
+    await sendToMain(
+      deps,
+      `Monitor [${name}] auto-disabled after ${FAILURE_LIMIT} consecutive failures: ${reason}`,
+    );
+  } catch (err) {
+    logger.warn(
+      { monitor: name, err },
+      'Failed to notify main about auto-disable',
+    );
+  }
+}
+
 async function handleCheckFailure(
   monitor: Monitor,
   errMsg: string,
@@ -246,20 +266,7 @@ async function handleCheckFailure(
     { monitor: monitor.config.name, failures, err: errMsg },
     'Monitor check failed',
   );
-  if (failures >= FAILURE_LIMIT) {
-    autoDisableMonitor(monitor.config.name, errMsg);
-    try {
-      await sendToMain(
-        deps,
-        `Monitor [${monitor.config.name}] auto-disabled after ${FAILURE_LIMIT} consecutive failures: ${errMsg}`,
-      );
-    } catch (notifyErr) {
-      logger.warn(
-        { monitor: monitor.config.name, err: notifyErr },
-        'Failed to notify main about auto-disable',
-      );
-    }
-  }
+  await maybeNotifyAutoDisable(monitor.config.name, failures, errMsg, deps);
 }
 
 export async function runMonitorOnce(
@@ -306,20 +313,12 @@ export async function runMonitorOnce(
       error: `timeout after ${CHECK_TIMEOUT_MS}ms`,
     });
     const failures = recordFailure(name);
-    if (failures >= FAILURE_LIMIT) {
-      autoDisableMonitor(name, `timeout after ${CHECK_TIMEOUT_MS}ms`);
-      try {
-        await sendToMain(
-          deps,
-          `Monitor [${name}] auto-disabled after ${FAILURE_LIMIT} consecutive failures: timeout`,
-        );
-      } catch (err) {
-        logger.warn(
-          { monitor: name, err },
-          'Failed to notify main about auto-disable',
-        );
-      }
-    }
+    await maybeNotifyAutoDisable(
+      name,
+      failures,
+      `timeout after ${CHECK_TIMEOUT_MS}ms`,
+      deps,
+    );
     updateAfterRun(name, runAt);
     return;
   }
@@ -486,6 +485,7 @@ export function mergeMonitorConfig(
 
 let monitorLoopRunning = false;
 const scheduledTimers = new Map<string, NodeJS.Timeout>();
+const staggerTimers = new Map<string, NodeJS.Timeout>();
 
 export function startMonitorLoop(
   monitors: Monitor[],
@@ -509,7 +509,7 @@ export function startMonitorLoop(
     if (!current.has(state.name)) {
       logger.info(
         { monitor: state.name },
-        'Purging stale monitor state (file removed)',
+        'Stale monitor state in DB (file removed). Preserved for history; will be inert.',
       );
     }
   }
@@ -541,7 +541,11 @@ export function startMonitorLoop(
     // Fire once shortly after startup with a small stagger, so monitors don't
     // all pound their external APIs at the same instant.
     const stagger = 5_000 + Math.floor(Math.random() * 15_000);
-    setTimeout(fire, stagger);
+    const staggerTimer = setTimeout(() => {
+      staggerTimers.delete(merged.config.name);
+      fire();
+    }, stagger);
+    staggerTimers.set(merged.config.name, staggerTimer);
 
     logger.info(
       {
@@ -558,4 +562,6 @@ export function _resetMonitorLoopForTests(): void {
   monitorLoopRunning = false;
   for (const t of scheduledTimers.values()) clearInterval(t);
   scheduledTimers.clear();
+  for (const t of staggerTimers.values()) clearTimeout(t);
+  staggerTimers.clear();
 }

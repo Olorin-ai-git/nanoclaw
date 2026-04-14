@@ -72,6 +72,16 @@ describe('computeDataHash', () => {
   it('differs for different values', () => {
     expect(computeDataHash({ a: 1 })).not.toBe(computeDataHash({ a: 2 }));
   });
+  it('hashes equivalent nested objects identically regardless of key order', () => {
+    const a = { a: { z: 1, b: 2 }, x: [1, 2, 3] };
+    const b = { x: [1, 2, 3], a: { b: 2, z: 1 } };
+    expect(computeDataHash(a)).toBe(computeDataHash(b));
+  });
+  it('does not treat reordered arrays as equivalent', () => {
+    expect(computeDataHash({ items: [1, 2, 3] })).not.toBe(
+      computeDataHash({ items: [3, 2, 1] }),
+    );
+  });
 });
 
 describe('injectMonitorMessage', () => {
