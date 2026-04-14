@@ -448,6 +448,24 @@ def main():
         result = subprocess.run(cmd, cwd=NANOCLAW_DIR)
         sys.exit(result.returncode)
 
+    if args.monitor and args.history:
+        rows = get_monitor_history(DB_PATH, args.monitor, limit=10)
+        if not rows:
+            print(f"No run history yet for '{args.monitor}'.")
+            return
+        print(
+            f"{'RUN AT':<22} {'STATUS':<22} {'WOKE':<5} {'PRIO':<7} {'DUR_MS':<7} SUMMARY"
+        )
+        print("-" * 110)
+        for r in rows:
+            woke = "yes" if r["woke_agent"] else "no"
+            summary = (r["summary"] or r["error"] or "")[:50]
+            print(
+                f"{r['run_at']:<22} {r['status']:<22} "
+                f"{woke:<5} {(r['priority'] or '-'):<7} {r['duration_ms']:<7} {summary}"
+            )
+        return
+
     # Resolve prompt: --pipe reads stdin, optionally prepended with positional arg
     if args.pipe or (not sys.stdin.isatty() and not args.prompt):
         stdin_text = sys.stdin.read().strip()
