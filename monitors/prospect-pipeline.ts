@@ -19,7 +19,7 @@ interface ProspectSummary {
   last_outreach_date: string | null;
 }
 
-function parseProspectsFile(content: string): ProspectSummary {
+export function parseProspectsFile(content: string): ProspectSummary {
   const lines = content.split(/\r?\n/);
   let total = 0;
   let unsent = 0;

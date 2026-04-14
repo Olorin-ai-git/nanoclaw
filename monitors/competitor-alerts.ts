@@ -38,7 +38,7 @@ interface FeedItem {
   pubDate: string;
 }
 
-function parseRss(xml: string): FeedItem[] {
+export function parseRss(xml: string): FeedItem[] {
   const items: FeedItem[] = [];
   const itemRe = /<item[\s\S]*?<\/item>/g;
   const titleRe = /<title>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/title>/;
