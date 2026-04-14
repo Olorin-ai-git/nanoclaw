@@ -436,16 +436,23 @@ const DEFAULT_GLOBAL: MonitorGlobalConfig = {
   monitors: {},
 };
 
+let loadedGlobal: MonitorGlobalConfig | null = null;
+
+export function getLoadedGlobalConfig(): MonitorGlobalConfig | null {
+  return loadedGlobal;
+}
+
 export function loadMonitorConfig(pathOverride?: string): MonitorGlobalConfig {
   const p = pathOverride ?? MONITOR_CONFIG_PATH;
   if (!fs.existsSync(p)) {
     logger.info({ path: p }, 'No monitor config file — using defaults');
-    return DEFAULT_GLOBAL;
+    loadedGlobal = DEFAULT_GLOBAL;
+    return loadedGlobal;
   }
   try {
     const raw = fs.readFileSync(p, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<MonitorGlobalConfig>;
-    return {
+    loadedGlobal = {
       enabled: parsed.enabled ?? DEFAULT_GLOBAL.enabled,
       defaultIntervalMinutes:
         parsed.defaultIntervalMinutes ?? DEFAULT_GLOBAL.defaultIntervalMinutes,
@@ -459,12 +466,14 @@ export function loadMonitorConfig(pathOverride?: string): MonitorGlobalConfig {
       },
       monitors: parsed.monitors ?? {},
     };
+    return loadedGlobal;
   } catch (err) {
     logger.warn(
       { path: p, err },
       'Failed to parse monitor config — using defaults',
     );
-    return DEFAULT_GLOBAL;
+    loadedGlobal = DEFAULT_GLOBAL;
+    return loadedGlobal;
   }
 }
 

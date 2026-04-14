@@ -1,4 +1,5 @@
 import { logger } from '../src/logger.js';
+import { getLoadedGlobalConfig } from '../src/monitor-runner.js';
 import type {
   Monitor,
   MonitorPriority,
@@ -6,7 +7,7 @@ import type {
 } from '../src/monitor-types.js';
 import { readEnvFile } from '../src/env.js';
 
-const BUYING_SIGNALS = [
+const FALLBACK_BUYING_SIGNALS = [
   'pricing',
   'price',
   'demo',
@@ -18,13 +19,22 @@ const BUYING_SIGNALS = [
   'quote',
 ];
 
-function looksLikeBuyingSignal(text: string): boolean {
+function resolveBuyingSignals(): string[] {
+  return (
+    getLoadedGlobalConfig()?.monitors[config.name]?.extras?.buyingSignals ??
+    FALLBACK_BUYING_SIGNALS
+  );
+}
+
+function looksLikeBuyingSignal(text: string, signals: string[]): boolean {
   const lower = text.toLowerCase();
-  return BUYING_SIGNALS.some((s) => lower.includes(s));
+  return signals.some((s) => lower.includes(s));
 }
 
 export function priorityForComment(text: string): MonitorPriority {
-  return looksLikeBuyingSignal(text) ? 'urgent' : 'normal';
+  return looksLikeBuyingSignal(text, resolveBuyingSignals())
+    ? 'urgent'
+    : 'normal';
 }
 
 export const config = {

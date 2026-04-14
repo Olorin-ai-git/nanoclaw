@@ -1,9 +1,16 @@
+import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { _initTestDatabase, setRegisteredGroup } from './db.js';
 import {
   computeDataHash,
+  getLoadedGlobalConfig,
   injectMonitorMessage,
+  loadMonitorConfig,
   runMonitorOnce,
 } from './monitor-runner.js';
 import {
@@ -387,6 +394,36 @@ describe('runMonitorOnce', () => {
 
     expect(enqueued).toHaveLength(0);
     expect(getMonitorHistory('m', 10)[0].status).toBe('skipped-disabled');
+  });
+
+  it('getLoadedGlobalConfig returns the last-loaded config including extras', () => {
+    const tmp = path.join(
+      os.tmpdir(),
+      `monitor-config-${crypto.randomUUID()}.json`,
+    );
+    fs.writeFileSync(
+      tmp,
+      JSON.stringify({
+        enabled: true,
+        defaultIntervalMinutes: 30,
+        maxConcurrentMonitors: 3,
+        quietHours: {
+          start: '23:00',
+          end: '07:00',
+          timezone: 'America/New_York',
+        },
+        monitors: {
+          'test-monitor': { extras: { keywords: ['foo', 'bar'] } },
+        },
+      }),
+    );
+    loadMonitorConfig(tmp);
+    const loaded = getLoadedGlobalConfig();
+    expect(loaded?.monitors['test-monitor']?.extras?.keywords).toEqual([
+      'foo',
+      'bar',
+    ]);
+    fs.unlinkSync(tmp);
   });
 
   it('preserves seen_ids that the monitor persisted during check()', async () => {

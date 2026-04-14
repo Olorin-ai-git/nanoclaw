@@ -1,4 +1,5 @@
 import { logger } from '../src/logger.js';
+import { getLoadedGlobalConfig } from '../src/monitor-runner.js';
 import {
   getMonitorState,
   initMonitorState,
@@ -17,7 +18,7 @@ const FEEDS: Feed[] = [
   { source: 'eLearning Industry', url: 'https://elearningindustry.com/rss' },
 ];
 
-const KEYWORDS = [
+const FALLBACK_KEYWORDS = [
   'Synthesia',
   'HeyGen',
   'Colossyan',
@@ -77,9 +78,9 @@ function parseRss(xml: string): FeedItem[] {
   return items;
 }
 
-function matchKeywords(text: string): string[] {
+function matchKeywords(text: string, keywords: string[]): string[] {
   const lower = text.toLowerCase();
-  return KEYWORDS.filter((k) => lower.includes(k.toLowerCase()));
+  return keywords.filter((k) => lower.includes(k.toLowerCase()));
 }
 
 async function fetchFeed(feed: Feed): Promise<FeedItem[]> {
@@ -105,6 +106,9 @@ export const config = {
 };
 
 export async function check(): Promise<MonitorResult> {
+  const keywords =
+    getLoadedGlobalConfig()?.monitors[config.name]?.extras?.keywords ??
+    FALLBACK_KEYWORDS;
   initMonitorState(config.name, config.enabled);
   const state = getMonitorState(config.name)!;
   const seen = new Set(state.seen_ids);
@@ -126,7 +130,7 @@ export async function check(): Promise<MonitorResult> {
       if (seen.has(key)) continue;
       const published = new Date(item.pubDate).getTime();
       if (now - published > maxAgeMs) continue;
-      const matched = matchKeywords(item.title);
+      const matched = matchKeywords(item.title, keywords);
       if (matched.length === 0) continue;
       hits.push({ feed, item, matched });
     }

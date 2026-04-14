@@ -8,10 +8,59 @@
     "timezone": "America/New_York"
   },
   "monitors": {
-    "reddit-keywords": { "enabled": true, "intervalMinutes": 20 },
+    "reddit-keywords": {
+      "enabled": true,
+      "intervalMinutes": 20,
+      "extras": {
+        "keywords": [
+          "interactive video",
+          "training video engagement",
+          "video completion rate",
+          "boring training",
+          "compliance training",
+          "AI training",
+          "edtech tool",
+          "Synthesia alternative",
+          "HeyGen alternative",
+          "training LMS",
+          "onboarding video",
+          "video learning"
+        ]
+      }
+    },
     "prospect-pipeline": { "enabled": true, "intervalMinutes": 60 },
     "email-responses": { "enabled": true, "intervalMinutes": 30 },
-    "linkedin-engagement": { "enabled": true, "intervalMinutes": 45 },
-    "competitor-alerts": { "enabled": true, "intervalMinutes": 120 }
+    "linkedin-engagement": {
+      "enabled": true,
+      "intervalMinutes": 45,
+      "extras": {
+        "buyingSignals": [
+          "pricing",
+          "price",
+          "demo",
+          "trial",
+          "how much",
+          "integrate",
+          "integration",
+          "cost",
+          "quote"
+        ]
+      }
+    },
+    "competitor-alerts": {
+      "enabled": true,
+      "intervalMinutes": 120,
+      "extras": {
+        "keywords": [
+          "Synthesia",
+          "HeyGen",
+          "Colossyan",
+          "D-ID",
+          "interactive video",
+          "AI training",
+          "video learning platform"
+        ]
+      }
+    }
   }
 }

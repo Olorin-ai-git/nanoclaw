@@ -1,4 +1,5 @@
 import { logger } from '../src/logger.js';
+import { getLoadedGlobalConfig } from '../src/monitor-runner.js';
 import {
   getMonitorState,
   initMonitorState,
@@ -12,7 +13,7 @@ const MAX_AGE_HOURS = 4;
 const USER_AGENT = 'nanoclaw-monitor/1.0';
 const FETCH_TIMEOUT_MS = 25_000;
 
-const KEYWORDS = [
+const FALLBACK_KEYWORDS = [
   'interactive video',
   'training video engagement',
   'video completion rate',
@@ -42,9 +43,9 @@ interface RedditResponse {
   data?: { children?: Array<{ data?: RedditPost }> };
 }
 
-function matchKeyword(text: string): string | null {
+function matchKeyword(text: string, keywords: string[]): string | null {
   const lower = text.toLowerCase();
-  for (const kw of KEYWORDS) {
+  for (const kw of keywords) {
     if (lower.includes(kw.toLowerCase())) return kw;
   }
   return null;
@@ -73,6 +74,9 @@ export const config = {
 };
 
 export async function check(): Promise<MonitorResult> {
+  const keywords =
+    getLoadedGlobalConfig()?.monitors[config.name]?.extras?.keywords ??
+    FALLBACK_KEYWORDS;
   initMonitorState(config.name, config.enabled);
   const state = getMonitorState(config.name)!;
   const seen = new Set(state.seen_ids);
@@ -87,7 +91,7 @@ export async function check(): Promise<MonitorResult> {
     if (seen.has(p.id)) continue;
     const ageMs = now - p.created_utc * 1000;
     if (ageMs > maxAgeMs) continue;
-    const kw = matchKeyword(`${p.title}\n${p.selftext ?? ''}`);
+    const kw = matchKeyword(`${p.title}\n${p.selftext ?? ''}`, keywords);
     if (!kw) continue;
     hits.push({ post: p, keyword: kw, ageHours: ageMs / 3_600_000 });
   }

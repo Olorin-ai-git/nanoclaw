@@ -9,6 +9,15 @@ export interface TimeRange {
 }
 
 /**
+ * Extra per-monitor values that live in monitors/config.json and are
+ * read at runtime by individual monitor files (e.g. keyword lists).
+ */
+export interface MonitorConfigExtras {
+  keywords?: string[];
+  buyingSignals?: string[];
+}
+
+/**
  * Per-monitor configuration (declared in each monitor file and
  * merged with overrides from monitors/config.json at load time).
  */
@@ -24,6 +33,8 @@ export interface MonitorConfig {
   weekdaysOnly?: boolean;
   /** If set, only run between these hours in the configured timezone. */
   businessHours?: TimeRange;
+  /** Runtime-tunable extras (keyword lists, signal lists) sourced from monitors/config.json. */
+  extras?: MonitorConfigExtras;
 }
 
 export interface MonitorResult {
