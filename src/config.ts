@@ -58,6 +58,10 @@ export const MAX_MESSAGES_PER_PROMPT = Math.max(
 );
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
+export const IPC_RESPONSE_TIMEOUT = parseInt(
+  process.env.IPC_RESPONSE_TIMEOUT || '300000',
+  10,
+); // 5min default — max time to wait for output after piping IPC messages
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,

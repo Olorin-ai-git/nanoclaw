@@ -9,6 +9,7 @@ import {
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  IPC_RESPONSE_TIMEOUT,
   MAX_MESSAGES_PER_PROMPT,
   ONECLI_URL,
   POLL_INTERVAL,
@@ -77,6 +78,38 @@ let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+
+// IPC response watchdog: detects when a container consumed piped messages but
+// produces no output within IPC_RESPONSE_TIMEOUT.  Without this, a hung
+// container silently blocks all messages for the group until the 30-min hard
+// timeout fires.
+const ipcResponseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Called from the message loop after piping an IPC message to reset the deadline. */
+function startIpcResponseWatchdog(chatJid: string): void {
+  const existing = ipcResponseTimers.get(chatJid);
+  if (existing) clearTimeout(existing);
+
+  const timer = setTimeout(() => {
+    ipcResponseTimers.delete(chatJid);
+    logger.warn(
+      { chatJid, timeoutMs: IPC_RESPONSE_TIMEOUT },
+      'IPC response timeout — container received messages but produced no output, closing',
+    );
+    queue.closeStdin(chatJid);
+  }, IPC_RESPONSE_TIMEOUT);
+
+  ipcResponseTimers.set(chatJid, timer);
+}
+
+/** Called when agent output is received to cancel the IPC watchdog. */
+function clearIpcResponseWatchdog(chatJid: string): void {
+  const timer = ipcResponseTimers.get(chatJid);
+  if (timer) {
+    clearTimeout(timer);
+    ipcResponseTimers.delete(chatJid);
+  }
+}
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -299,6 +332,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
+      clearIpcResponseWatchdog(chatJid);
     }
 
     if (result.status === 'success') {
@@ -312,6 +346,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
+  clearIpcResponseWatchdog(chatJid);
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
@@ -519,6 +554,7 @@ async function startMessageLoop(): Promise<void> {
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
             );
+            startIpcResponseWatchdog(chatJid);
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();

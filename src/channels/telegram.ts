@@ -346,9 +346,12 @@ export class TelegramChannel implements Channel {
       logger.error({ err: err.message }, 'Telegram bot error');
     });
 
-    // Start polling — returns a Promise that resolves when started
+    // Start polling — returns a Promise that resolves when bot.stop() is called.
+    // Polling transport errors (e.g. 409 conflict from a stale instance) surface
+    // as a rejected promise.  Without .catch() they become unhandled rejections.
     return new Promise<void>((resolve) => {
       this.bot!.start({
+        drop_pending_updates: true,
         onStart: (botInfo: any) => {
           logger.info(
             { username: botInfo.username, id: botInfo.id },
@@ -360,6 +363,17 @@ export class TelegramChannel implements Channel {
           );
           resolve();
         },
+      }).catch((err: any) => {
+        const is409 =
+          err?.error_code === 409 ||
+          (err?.message || '').includes('terminated by other getUpdates');
+        if (is409) {
+          logger.warn(
+            'Telegram polling conflict — another bot instance may still be running. Will retry on next restart.',
+          );
+        } else {
+          logger.error({ err }, 'Telegram polling stopped unexpectedly');
+        }
       });
     });
   }
