@@ -406,7 +406,10 @@ export async function runMonitorOnce(
     return;
   }
 
-  updateAfterWake(name, runAt, dataHash, state.seen_ids);
+  // Re-read state — monitors may persist their own seen_ids during check().
+  // Using the pre-check `state.seen_ids` here would clobber the monitor's update.
+  const latest = getMonitorState(name) ?? state;
+  updateAfterWake(name, runAt, dataHash, latest.seen_ids);
   logMonitorRun({
     monitor_name: name,
     run_at: runAt,

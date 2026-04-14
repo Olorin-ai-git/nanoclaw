@@ -388,4 +388,45 @@ describe('runMonitorOnce', () => {
     expect(enqueued).toHaveLength(0);
     expect(getMonitorHistory('m', 10)[0].status).toBe('skipped-disabled');
   });
+
+  it('preserves seen_ids that the monitor persisted during check()', async () => {
+    const enqueued: string[] = [];
+    const deps = fakeDeps(enqueued, fakeChannel());
+
+    // Monitor writes its own seen_ids via the store during check().
+    const m: Monitor = {
+      config: {
+        name: 'stateful',
+        intervalMinutes: 20,
+        targetGroup: 'reddit-scout',
+        enabled: true,
+      },
+      check: async () => {
+        // Use the store directly — this is how real monitors dedupe per-item.
+        const store = await import('./monitor-store.js');
+        store.initMonitorState('stateful', true);
+        store.updateAfterWake('stateful', '2026-04-13T14:59:00.000Z', '', [
+          'post-1',
+          'post-2',
+        ]);
+        return {
+          shouldWake: true,
+          priority: 'normal',
+          data: { post: 'post-1' },
+          summary: 'hit',
+        };
+      },
+    };
+
+    await runMonitorOnce(
+      m,
+      baseGlobal(),
+      deps,
+      new Date('2026-04-13T15:00:00.000Z'),
+    );
+
+    const finalState = getMonitorState('stateful')!;
+    // Runner must preserve the monitor's seen_ids update, not overwrite it.
+    expect(finalState.seen_ids).toEqual(['post-1', 'post-2']);
+  });
 });

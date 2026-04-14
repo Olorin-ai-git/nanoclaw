@@ -1,3 +1,4 @@
+import { logger } from '../src/logger.js';
 import {
   getMonitorState,
   initMonitorState,
@@ -63,6 +64,14 @@ function parseRss(xml: string): FeedItem[] {
         ? new Date().toISOString()
         : date.toISOString(),
     });
+  }
+
+  if (items.length === 0 && xml.trim().length > 100) {
+    const isAtom = /<feed\b/i.test(xml) || /<entry\b/i.test(xml);
+    logger.debug(
+      { format: isAtom ? 'atom' : 'unknown' },
+      'competitor-alerts: RSS parser returned 0 items (Atom or non-standard feed)',
+    );
   }
   return items;
 }
