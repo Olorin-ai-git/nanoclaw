@@ -68,7 +68,12 @@ export function isWeekday(at: Date, timezone: string): boolean {
   return !['Sat', 'Sun'].includes(weekday);
 }
 
-/** Business hours: returns true when local time is in [start, end). */
+/**
+ * Business hours: returns true when local time is in [start, end).
+ * `start` must be strictly before `end` — wrap-around windows (e.g. overnight
+ * 22:00 → 06:00) are rejected to avoid silently-wrong "always outside" results.
+ * Use `isInQuietHours` for wrap-around semantics.
+ */
 export function isBusinessHours(
   at: Date,
   startHHMM: string,
@@ -77,8 +82,13 @@ export function isBusinessHours(
 ): boolean {
   const start = parseHHMM(startHHMM);
   const end = parseHHMM(endHHMM);
-  const now = minutesOfDay(at, timezone);
   const s = start.hour * 60 + start.minute;
   const e = end.hour * 60 + end.minute;
+  if (s >= e) {
+    throw new Error(
+      `isBusinessHours requires start < end (got ${startHHMM} → ${endHHMM}); use isInQuietHours for overnight windows`,
+    );
+  }
+  const now = minutesOfDay(at, timezone);
   return now >= s && now < e;
 }

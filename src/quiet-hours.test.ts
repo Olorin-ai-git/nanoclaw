@@ -106,4 +106,13 @@ describe('isBusinessHours', () => {
       true,
     );
   });
+  it('throws for wrap-around windows (use isInQuietHours instead)', () => {
+    const at = new Date('2026-04-13T03:00:00.000Z'); // 23:00 ET prior day
+    expect(() =>
+      isBusinessHours(at, '22:00', '06:00', 'America/New_York'),
+    ).toThrow(/start < end/);
+    expect(() =>
+      isBusinessHours(at, '09:00', '09:00', 'America/New_York'),
+    ).toThrow(/start < end/);
+  });
 });
