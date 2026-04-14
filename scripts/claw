@@ -442,6 +442,12 @@ def main():
         print(f"Monitor '{args.monitor}' {verb}.")
         return
 
+    if args.monitor and args.run_now:
+        cmd = ["npx", "tsx", str(NANOCLAW_DIR / "scripts" / "run-monitor.ts"), args.monitor]
+        dbg(f"run-now: {' '.join(cmd)}")
+        result = subprocess.run(cmd, cwd=NANOCLAW_DIR)
+        sys.exit(result.returncode)
+
     # Resolve prompt: --pipe reads stdin, optionally prepended with positional arg
     if args.pipe or (not sys.stdin.isatty() and not args.prompt):
         stdin_text = sys.stdin.read().strip()
