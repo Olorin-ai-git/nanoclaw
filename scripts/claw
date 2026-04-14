@@ -105,6 +105,92 @@ def get_groups(db: Path) -> list[dict]:
     return [{"jid": r[0], "name": r[1], "folder": r[2], "is_main": bool(r[3])} for r in rows]
 
 
+def get_monitor_states(db: Path) -> list[dict]:
+    if not db.exists():
+        return []
+    conn = sqlite3.connect(db)
+    try:
+        rows = conn.execute(
+            """
+            SELECT name, enabled, last_run, last_wake, consecutive_failures,
+                   auto_disabled_reason
+            FROM monitor_state
+            ORDER BY name
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # monitor_state table doesn't exist yet (e.g. old DB)
+        return []
+    finally:
+        conn.close()
+    return [
+        {
+            "name": r[0],
+            "enabled": bool(r[1]),
+            "last_run": r[2],
+            "last_wake": r[3],
+            "consecutive_failures": r[4],
+            "auto_disabled_reason": r[5],
+        }
+        for r in rows
+    ]
+
+
+def set_monitor_enabled_in_db(db: Path, name: str, enabled: bool) -> bool:
+    if not db.exists():
+        return False
+    conn = sqlite3.connect(db)
+    try:
+        cur = conn.execute(
+            """
+            UPDATE monitor_state
+            SET enabled = ?, auto_disabled_reason = NULL
+            WHERE name = ?
+            """,
+            (1 if enabled else 0, name),
+        )
+        changed = cur.rowcount > 0
+        conn.commit()
+        return changed
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        conn.close()
+
+
+def get_monitor_history(db: Path, name: str, limit: int = 10) -> list[dict]:
+    if not db.exists():
+        return []
+    conn = sqlite3.connect(db)
+    try:
+        rows = conn.execute(
+            """
+            SELECT run_at, duration_ms, status, woke_agent, priority, summary, error
+            FROM monitor_run_logs
+            WHERE monitor_name = ?
+            ORDER BY run_at DESC
+            LIMIT ?
+            """,
+            (name, limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+    return [
+        {
+            "run_at": r[0],
+            "duration_ms": r[1],
+            "status": r[2],
+            "woke_agent": bool(r[3]),
+            "priority": r[4],
+            "summary": r[5],
+            "error": r[6],
+        }
+        for r in rows
+    ]
+
+
 def find_group(groups: list[dict], query: str) -> dict | None:
     q = query.lower()
     # Exact name match
@@ -290,6 +376,18 @@ def main():
                         help="Container runtime (default: auto-detect)")
     parser.add_argument("--image", default=IMAGE, help=f"Container image (default: {IMAGE})")
     parser.add_argument("--list-groups", action="store_true", help="List registered groups and exit")
+    parser.add_argument("--monitors", action="store_true",
+                        help="List all monitors and their current state")
+    parser.add_argument("--monitor", metavar="NAME",
+                        help="Target a specific monitor for --enable/--disable/--run-now/--history")
+    parser.add_argument("--enable", action="store_true",
+                        help="Enable the monitor named by --monitor")
+    parser.add_argument("--disable", action="store_true",
+                        help="Disable the monitor named by --monitor")
+    parser.add_argument("--run-now", action="store_true",
+                        help="Fire the monitor named by --monitor immediately (via tsx)")
+    parser.add_argument("--history", action="store_true",
+                        help="Show last 10 runs of the monitor named by --monitor")
     parser.add_argument("--raw", action="store_true", help="Print raw JSON output")
     parser.add_argument("--timeout", type=int, default=300, metavar="SECS",
                         help="Max seconds to wait for a response (default: 300)")
@@ -308,6 +406,71 @@ def main():
         for g in groups:
             main_tag = " [main]" if g["is_main"] else ""
             print(f"{g['name']:<35} {g['folder']:<30} {g['jid']}{main_tag}")
+        return
+
+    if args.monitors:
+        states = get_monitor_states(DB_PATH)
+        if not states:
+            print("No monitors registered yet. Start NanoClaw once to initialize state.")
+            return
+        print(f"{'NAME':<25} {'ENABLED':<8} {'LAST RUN':<22} {'LAST WAKE':<22} {'FAIL':<4}")
+        print("-" * 90)
+        for s in states:
+            en = "yes" if s["enabled"] else "no"
+            tag = ""
+            if not s["enabled"] and s["auto_disabled_reason"]:
+                tag = f"  [auto-disabled: {s['auto_disabled_reason'][:50]}]"
+            print(
+                f"{s['name']:<25} {en:<8} "
+                f"{(s['last_run'] or '-')[:22]:<22} "
+                f"{(s['last_wake'] or '-')[:22]:<22} "
+                f"{s['consecutive_failures']:<4}{tag}"
+            )
+        return
+
+    if args.monitor and (args.enable or args.disable):
+        if args.enable and args.disable:
+            sys.exit("error: pass only one of --enable or --disable.")
+        enabled = bool(args.enable)
+        changed = set_monitor_enabled_in_db(DB_PATH, args.monitor, enabled)
+        if not changed:
+            sys.exit(
+                f"error: monitor '{args.monitor}' not found in DB. "
+                f"Has NanoClaw started yet?"
+            )
+        verb = "enabled" if enabled else "disabled"
+        print(f"Monitor '{args.monitor}' {verb}.")
+        return
+
+    if args.monitor and args.run_now:
+        # Use node_modules/.bin/tsx directly. `npx tsx` is unreliable because
+        # npx resolves "tsx" as an npm script name before checking node_modules.
+        tsx_bin = NANOCLAW_DIR / "node_modules" / ".bin" / "tsx"
+        if not tsx_bin.exists():
+            sys.exit(
+                f"error: tsx not found at {tsx_bin}. Run `npm install` in {NANOCLAW_DIR} first."
+            )
+        cmd = [str(tsx_bin), str(NANOCLAW_DIR / "scripts" / "run-monitor.ts"), args.monitor]
+        dbg(f"run-now: {' '.join(cmd)}")
+        result = subprocess.run(cmd, cwd=NANOCLAW_DIR)
+        sys.exit(result.returncode)
+
+    if args.monitor and args.history:
+        rows = get_monitor_history(DB_PATH, args.monitor, limit=10)
+        if not rows:
+            print(f"No run history yet for '{args.monitor}'.")
+            return
+        print(
+            f"{'RUN AT':<22} {'STATUS':<22} {'WOKE':<5} {'PRIO':<7} {'DUR_MS':<7} SUMMARY"
+        )
+        print("-" * 110)
+        for r in rows:
+            woke = "yes" if r["woke_agent"] else "no"
+            summary = (r["summary"] or r["error"] or "")[:50]
+            print(
+                f"{r['run_at']:<22} {r['status']:<22} "
+                f"{woke:<5} {(r['priority'] or '-'):<7} {r['duration_ms']:<7} {summary}"
+            )
         return
 
     # Resolve prompt: --pipe reads stdin, optionally prepended with positional arg
