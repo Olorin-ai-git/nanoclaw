@@ -14,6 +14,13 @@ import {
 
 let db: Database.Database;
 
+/** @internal — exposed for modules that share the same DB (monitor-store, etc). */
+export function getDb(): Database.Database {
+  if (!db)
+    throw new Error('Database not initialized. Call initDatabase() first.');
+  return db;
+}
+
 function createSchema(database: Database.Database): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS chats (
