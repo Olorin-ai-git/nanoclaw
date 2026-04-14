@@ -12,6 +12,11 @@ import {
   TaskRunLog,
 } from './types.js';
 
+// Must stay in sync with MONITOR_SENDER_PREFIX in monitor-runner.ts.
+// Declared here as a local constant to break the import cycle
+// (monitor-runner imports from db, so db cannot import from monitor-runner).
+const MONITOR_SENDER_PREFIX = '__monitor__:';
+
 let db: Database.Database;
 
 /** @internal — exposed for modules that share the same DB (monitor-store, etc). */
@@ -311,11 +316,20 @@ export function setLastGroupSync(): void {
   ).run(now);
 }
 
-/**
- * Store a message with full content.
- * Only call this for registered groups where message history is needed.
- */
-export function storeMessage(msg: NewMessage): void {
+/** Shared INSERT for all three message-store functions. */
+function insertMessage(msg: {
+  id: string;
+  chat_jid: string;
+  sender: string;
+  sender_name: string;
+  content: string;
+  timestamp: string;
+  is_from_me: boolean;
+  is_bot_message: boolean;
+  reply_to_message_id?: string | null;
+  reply_to_message_content?: string | null;
+  reply_to_sender_name?: string | null;
+}): void {
   db.prepare(
     `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, reply_to_message_id, reply_to_message_content, reply_to_sender_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
@@ -334,7 +348,26 @@ export function storeMessage(msg: NewMessage): void {
 }
 
 /**
+ * Store a message with full content.
+ * Only call this for registered groups where message history is needed.
+ * Rejects __monitor__:-prefixed senders — use storeMonitorMessage for those.
+ */
+export function storeMessage(msg: NewMessage): void {
+  if (msg.sender.startsWith(MONITOR_SENDER_PREFIX)) {
+    throw new Error(
+      `storeMessage: refusing to write sender "${msg.sender}"; use storeMonitorMessage for monitor-sourced rows`,
+    );
+  }
+  insertMessage({
+    ...msg,
+    is_from_me: msg.is_from_me ?? false,
+    is_bot_message: msg.is_bot_message ?? false,
+  });
+}
+
+/**
  * Store a message directly.
+ * Rejects __monitor__:-prefixed senders — use storeMonitorMessage for those.
  */
 export function storeMessageDirect(msg: {
   id: string;
@@ -346,18 +379,32 @@ export function storeMessageDirect(msg: {
   is_from_me: boolean;
   is_bot_message?: boolean;
 }): void {
-  db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    msg.id,
-    msg.chat_jid,
-    msg.sender,
-    msg.sender_name,
-    msg.content,
-    msg.timestamp,
-    msg.is_from_me ? 1 : 0,
-    msg.is_bot_message ? 1 : 0,
-  );
+  if (msg.sender.startsWith(MONITOR_SENDER_PREFIX)) {
+    throw new Error(
+      `storeMessageDirect: refusing to write sender "${msg.sender}"; use storeMonitorMessage for monitor-sourced rows`,
+    );
+  }
+  insertMessage({
+    ...msg,
+    is_bot_message: msg.is_bot_message ?? false,
+  });
+}
+
+/**
+ * Store a monitor-injected message. This is the ONLY function permitted to
+ * write rows whose sender starts with MONITOR_SENDER_PREFIX.
+ */
+export function storeMonitorMessage(msg: NewMessage): void {
+  if (!msg.sender.startsWith(MONITOR_SENDER_PREFIX)) {
+    throw new Error(
+      `storeMonitorMessage: sender "${msg.sender}" must start with "${MONITOR_SENDER_PREFIX}"`,
+    );
+  }
+  insertMessage({
+    ...msg,
+    is_from_me: msg.is_from_me ?? false,
+    is_bot_message: msg.is_bot_message ?? false,
+  });
 }
 
 export function getNewMessages(

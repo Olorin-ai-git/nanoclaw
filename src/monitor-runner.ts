@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 
 import { MONITOR_CONFIG_PATH } from './config.js';
-import { storeChatMetadata, storeMessage } from './db.js';
+import { storeChatMetadata, storeMonitorMessage } from './db.js';
 import { logger } from './logger.js';
 import type {
   Monitor,
@@ -126,7 +126,7 @@ export async function injectMonitorMessage(
     is_from_me: false,
     is_bot_message: false,
   };
-  storeMessage(msg);
+  storeMonitorMessage(msg);
   deps.enqueueMonitorCheck(chatJid);
 
   if (result.priority === 'urgent') {
