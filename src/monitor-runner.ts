@@ -543,7 +543,14 @@ export function startMonitorLoop(
 
     // Fire once shortly after startup with a small stagger, so monitors don't
     // all pound their external APIs at the same instant.
-    const stagger = 5_000 + Math.floor(Math.random() * 15_000);
+    // Stagger is deterministic (hash of monitor name) so startup-timing bugs
+    // are reproducible across restarts — same name always maps to the same offset.
+    const digest = crypto
+      .createHash('sha1')
+      .update(merged.config.name)
+      .digest();
+    const offset = digest.readUInt16BE(0) % 15_000;
+    const stagger = 5_000 + offset;
     const staggerTimer = setTimeout(() => {
       staggerTimers.delete(merged.config.name);
       fire();
@@ -559,12 +566,4 @@ export function startMonitorLoop(
       'Monitor scheduled',
     );
   }
-}
-
-export function _resetMonitorLoopForTests(): void {
-  monitorLoopRunning = false;
-  for (const t of scheduledTimers.values()) clearInterval(t);
-  scheduledTimers.clear();
-  for (const t of staggerTimers.values()) clearTimeout(t);
-  staggerTimers.clear();
 }
