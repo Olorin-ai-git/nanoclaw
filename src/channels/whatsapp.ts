@@ -305,12 +305,17 @@ export class WhatsAppChannel implements Channel {
               normalized.videoMessage?.caption ||
               '';
 
+            // Per-group identity: Dana-in-a-group uses "Dana:" prefix, not "Olorin:"
+            const groupEntry = groups[chatJid];
+            const groupAssistantName =
+              groupEntry?.assistantName || ASSISTANT_NAME;
+
             // WhatsApp group mentions use the LID in raw text (e.g. "@80355281346633")
             // instead of the display name. Normalize to @AssistantName for trigger matching.
             if (this.botLidUser && content.includes(`@${this.botLidUser}`)) {
               content = content.replace(
                 `@${this.botLidUser}`,
-                `@${ASSISTANT_NAME}`,
+                `@${groupAssistantName}`,
               );
             }
 
@@ -327,7 +332,7 @@ export class WhatsAppChannel implements Channel {
             // (even in DMs/self-chat) so we check for that.
             const isBotMessage = ASSISTANT_HAS_OWN_NUMBER
               ? fromMe
-              : content.startsWith(`${ASSISTANT_NAME}:`);
+              : content.startsWith(`${groupAssistantName}:`);
 
             this.opts.onMessage(chatJid, {
               id: msg.key.id || '',
@@ -365,9 +370,11 @@ export class WhatsAppChannel implements Channel {
     // On a shared number, prefix is also needed in DMs (including self-chat)
     // to distinguish bot output from user messages.
     // Skip only when the assistant has its own dedicated phone number.
-    const prefixed = ASSISTANT_HAS_OWN_NUMBER
-      ? text
-      : `${ASSISTANT_NAME}: ${text}`;
+    // Per-group assistantName overrides the global so agents with distinct
+    // identities (e.g. "Dana" in a family chat) don't get stamped as "Olorin".
+    const group = this.opts.registeredGroups()[jid];
+    const name = group?.assistantName || ASSISTANT_NAME;
+    const prefixed = ASSISTANT_HAS_OWN_NUMBER ? text : `${name}: ${text}`;
 
     if (!this.connected) {
       this.outgoingQueue.push({ jid, text: prefixed });
