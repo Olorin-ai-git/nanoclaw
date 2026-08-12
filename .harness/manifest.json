@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "canonical": {
+    "path": "/Users/olorin/Documents/projects/olorin/harness",
+    "commit": "da14a8f43c0c33b5f30abea59a60257285095964"
+  },
+  "units": [
+    {
+      "id": "process-core",
+      "type": "section",
+      "path": ".harness/PROCESS.md",
+      "marker": "harness:core",
+      "template": "templates/PROCESS.md",
+      "sha256": "357cd30c5fbeea2caf3c2207325e0a4fada6341804461258fcae30511b779943"
+    },
+    {
+      "id": "selfimprove-core",
+      "type": "section",
+      "path": ".harness/SELF-IMPROVE.md",
+      "marker": "harness:core",
+      "template": "templates/SELF-IMPROVE.md",
+      "sha256": "208c85f418dd5ba5326802cac03ec4447d369ee4d346b7f10ed3c8267c30ead9"
+    },
+    {
+      "id": "learnings-durable",
+      "type": "section",
+      "path": ".harness/LEARNINGS.md",
+      "marker": "harness:durable",
+      "template": "templates/LEARNINGS.md",
+      "sha256": "3be7481a25d4290977de80ed5cbf931fe7bcc3c9633a8fad09d958287bce1770"
+    },
+    {
+      "id": "agent-reviewer",
+      "type": "file",
+      "path": ".claude/agents/harness-reviewer.md",
+      "marker": null,
+      "template": "templates/agents/harness-reviewer.md",
+      "sha256": "a9a19fa41e00cc214f1f9f9ea8cd4a0182016a895d8bae6284911ea64422bdeb"
+    },
+    {
+      "id": "agent-auditor",
+      "type": "file",
+      "path": ".claude/agents/harness-auditor.md",
+      "marker": null,
+      "template": "templates/agents/harness-auditor.md",
+      "sha256": "d5d47cd04921f03059709867ba654ca2f4468bbc2138141aaf5a641b1b64c362"
+    },
+    {
+      "id": "context-agents",
+      "type": "section",
+      "marker": "harness:context",
+      "template": "templates/context/harness-context.md",
+      "path": "CLAUDE.md",
+      "sha256": "43c970e3b09db10c1bc366a8b71753b534ab1921751730d410bec1b9e1954c4a"
+    },
+    {
+      "id": "cli",
+      "type": "vendored",
+      "path": ".harness",
+      "marker": null,
+      "template": "",
+      "sha256": "5d0eaa107b263f1ea29fe09197e05914b7f55f6ff073c3c2c00976a8a3e4f48c"
+    }
+  ]
+}

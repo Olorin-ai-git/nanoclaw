@@ -1,0 +1,51 @@
+#!/bin/sh
+# Locates a Python >= 3.11 and dispatches to the harness CLI package next to this script.
+set -eu
+SELF=$0
+HOPS=0
+while [ -L "$SELF" ]; do
+  HOPS=$((HOPS + 1))
+  if [ "$HOPS" -gt 40 ]; then
+    echo "harness: symlink chain for $0 exceeds 40 links — break the cycle" >&2
+    exit 3
+  fi
+  LINK=$(readlink "$SELF")
+  case $LINK in
+    /*) SELF=$LINK ;;
+    *) SELF=$(dirname -- "$SELF")/$LINK ;;
+  esac
+done
+HOME_DIR=$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)
+
+qualifies() {
+  # Output sentinel, not exit status alone: an arg-swallowing binary that
+  # exits 0 regardless would otherwise pass the probe and then silently
+  # no-op every harness command.
+  command -v "$1" >/dev/null 2>&1 || return 1
+  PROBE=$("$1" -c 'import sys; sys.stdout.write("harnesspy-ok" if sys.version_info >= (3, 11) else "harnesspy-old")' 2>/dev/null) || return 1
+  [ "$PROBE" = "harnesspy-ok" ]
+}
+
+# HARNESS_PYTHON names the interpreter explicitly; when set it must qualify —
+# silently falling through would run a different interpreter than the one asked for.
+if [ -n "${HARNESS_PYTHON:-}" ]; then
+  if ! qualifies "$HARNESS_PYTHON"; then
+    echo "harness: HARNESS_PYTHON=$HARNESS_PYTHON is not a Python >= 3.11 on PATH" >&2
+    exit 3
+  fi
+  # -P keeps the invoking directory off sys.path, so a project's own cli/
+  # package can never shadow the vendored harness CLI.
+  # -B keeps bytecode caches out of the vendored install.
+  PYTHONPATH="$HOME_DIR${PYTHONPATH:+:$PYTHONPATH}" exec "$HARNESS_PYTHON" -P -B -m cli "$@"
+fi
+for py in python3.11 python3.12 python3.13 python3; do
+  if qualifies "$py"; then
+    PYTHONPATH="$HOME_DIR${PYTHONPATH:+:$PYTHONPATH}" exec "$py" -P -B -m cli "$@"
+  fi
+done
+FOUND=$(command -v python3 || echo "none")
+if [ "$FOUND" != "none" ]; then
+  FOUND="$FOUND ($("$FOUND" -c 'import sys; sys.stdout.write(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || echo "version unreadable"))"
+fi
+echo "harness: requires Python >= 3.11; probed python3.11/python3.12/python3.13/python3 — best python3 found: $FOUND (set HARNESS_PYTHON to name one explicitly)" >&2
+exit 3

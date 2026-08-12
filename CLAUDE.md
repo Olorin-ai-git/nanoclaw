@@ -78,3 +78,10 @@ systemctl --user restart nanoclaw
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
+
+<!-- harness:context:begin -->
+
+## Olorin harness
+
+This project runs in the Olorin harness. For goal-scale work — explicit goals, features, and multi-step fixes that end in a completion claim — follow `.harness/PROCESS.md`; questions, investigations, and single-edit changes are exempt. Run state lives in `.harness/runs/` (one journal per goal), with the active pointer in `.harness/STATE.md`. Self-improvement (`.harness/SELF-IMPROVE.md`) is part of every goal, not an optional extra.
+<!-- harness:context:end -->
