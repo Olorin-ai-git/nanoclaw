@@ -41,7 +41,8 @@ export interface EnabledTwoGatesRouting {
 }
 
 export type TwoGatesRoutingConfig =
-  DisabledTwoGatesRouting | EnabledTwoGatesRouting;
+  | DisabledTwoGatesRouting
+  | EnabledTwoGatesRouting;
 
 export interface EreborRunCorrelation {
   groupId: string;
