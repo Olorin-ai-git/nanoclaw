@@ -32,6 +32,7 @@ export interface ProviderBridge {
 export interface ProviderBridgeDependencies {
   requestId: () => string;
   log: (fields: Record<string, unknown>, message: string) => void;
+  providerCa?: readonly string[];
 }
 
 export function latestCorrelatedMessageId(
@@ -183,7 +184,7 @@ function validateCorrelation(correlation: ProviderCorrelation): void {
   }
 }
 
-function combinedCa(caCertPath: string): string[] {
+function proxyCa(caCertPath: string): string[] {
   const privateCa = fs.readFileSync(caCertPath, 'utf8');
   if (!privateCa.includes('BEGIN CERTIFICATE')) {
     throw new Error('TwoGates CA file does not contain a PEM certificate');
@@ -201,7 +202,8 @@ function originPort(origin: URL): number {
 
 function connectTunnel(
   config: ProviderRoutingConfig,
-  ca: string[],
+  proxyTrust: string[],
+  providerTrust: string[],
   signal: AbortSignal,
 ): Promise<tls.TLSSocket> {
   const proxy = new URL(config.proxyUrl);
@@ -213,7 +215,7 @@ function connectTunnel(
       host: proxy.hostname,
       port: proxyPort(proxy),
       servername: proxy.hostname,
-      ca,
+      ca: proxyTrust,
       rejectUnauthorized: true,
     });
     outer.setTimeout(config.connectTimeoutMs);
@@ -276,7 +278,7 @@ function connectTunnel(
       const providerSocket = tls.connect({
         socket: outer,
         servername: origin.hostname,
-        ca,
+        ca: providerTrust,
         rejectUnauthorized: true,
       });
       inner = providerSocket;
@@ -441,7 +443,10 @@ export async function startProviderBridge(
   currentCorrelation: () => ProviderCorrelation,
   dependencies: ProviderBridgeDependencies,
 ): Promise<ProviderBridge> {
-  const ca = combinedCa(config.caCertPath);
+  const proxyTrust = proxyCa(config.caCertPath);
+  const providerTrust = dependencies.providerCa
+    ? [...dependencies.providerCa]
+    : [...tls.rootCertificates];
   const origin = new URL(config.anthropicOrigin);
   let activeRequests = 0;
   const sockets = new Set<import('net').Socket>();
@@ -502,7 +507,8 @@ export async function startProviderBridge(
           );
           tunnel = await connectTunnel(
             config,
-            ca,
+            proxyTrust,
+            providerTrust,
             requestAbortController.signal,
           );
 

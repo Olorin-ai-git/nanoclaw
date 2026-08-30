@@ -20,21 +20,23 @@ function runOpenSsl(directory, args) {
 }
 
 function createCertificates(directory) {
-  runOpenSsl(directory, [
-    'req',
-    '-x509',
-    '-newkey',
-    'rsa:2048',
-    '-nodes',
-    '-keyout',
-    'ca-key.pem',
-    '-out',
-    'ca.pem',
-    '-days',
-    '1',
-    '-subj',
-    '/CN=NanoClaw routing test CA',
-  ]);
+  for (const name of ['proxy', 'provider']) {
+    runOpenSsl(directory, [
+      'req',
+      '-x509',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-keyout',
+      `${name}-ca-key.pem`,
+      '-out',
+      `${name}-ca.pem`,
+      '-days',
+      '1',
+      '-subj',
+      `/CN=NanoClaw ${name} routing test CA`,
+    ]);
+  }
 
   for (const [name, commonName, subjectAltName] of [
     ['proxy', 'localhost', 'DNS:localhost'],
@@ -62,9 +64,9 @@ function createCertificates(directory) {
       '-in',
       `${name}.csr`,
       '-CA',
-      'ca.pem',
+      `${name}-ca.pem`,
       '-CAkey',
-      'ca-key.pem',
+      `${name}-ca-key.pem`,
       '-CAcreateserial',
       '-out',
       `${name}.pem`,
@@ -326,7 +328,7 @@ test('provider bridge uses dual TLS, Bearer CONNECT auth, and exact correlation 
     const routingConfig = {
       proxyUrl: `https://localhost:${proxyPort}`,
       proxyCredential: `tg_${'a'.repeat(16)}_${'1'.repeat(48)}`,
-      caCertPath: path.join(certificateDirectory, 'ca.pem'),
+      caCertPath: path.join(certificateDirectory, 'proxy-ca.pem'),
       taskClass: 'standard',
       anthropicOrigin: 'https://api.anthropic.test:443',
       connectTimeoutMs: 5000,
@@ -344,6 +346,12 @@ test('provider bridge uses dual TLS, Bearer CONNECT auth, and exact correlation 
     const dependencies = {
       requestId: () => '6ec69f65-a92a-40b8-b6b5-d66d9c740d31',
       log: (fields, message) => logs.push({ fields, message }),
+      providerCa: [
+        fs.readFileSync(
+          path.join(certificateDirectory, 'provider-ca.pem'),
+          'utf8',
+        ),
+      ],
     };
     bridge = await startProviderBridge(
       routingConfig,
