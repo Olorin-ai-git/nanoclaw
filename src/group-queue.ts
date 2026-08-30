@@ -35,6 +35,22 @@ export class GroupQueue {
   private processMessagesFn: ((groupJid: string) => Promise<boolean>) | null =
     null;
   private shuttingDown = false;
+  private lastIpcTimestamp = 0;
+  private ipcSequence = 0;
+
+  private nextIpcFilename(inputDir: string): string {
+    for (;;) {
+      const timestamp = Math.max(Date.now(), this.lastIpcTimestamp);
+      if (timestamp === this.lastIpcTimestamp) {
+        this.ipcSequence += 1;
+      } else {
+        this.lastIpcTimestamp = timestamp;
+        this.ipcSequence = 0;
+      }
+      const filename = `${timestamp.toString().padStart(13, '0')}-${this.ipcSequence.toString().padStart(12, '0')}.json`;
+      if (!fs.existsSync(path.join(inputDir, filename))) return filename;
+    }
+  }
 
   private getGroup(groupJid: string): GroupState {
     let state = this.groups.get(groupJid);
@@ -171,7 +187,7 @@ export class GroupQueue {
     const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
     try {
       fs.mkdirSync(inputDir, { recursive: true });
-      const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
+      const filename = this.nextIpcFilename(inputDir);
       const filepath = path.join(inputDir, filename);
       const tempPath = `${filepath}.tmp`;
       fs.writeFileSync(
