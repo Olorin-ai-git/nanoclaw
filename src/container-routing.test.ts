@@ -132,6 +132,30 @@ describe('production container routing boundary', () => {
     expect(removed).toEqual([prepared.mounts[0].hostPath]);
   });
 
+  it('keeps failed routing-file deletion registered for a later retry', () => {
+    const removed: string[] = [];
+    let attempts = 0;
+    const prepared = prepareTwoGatesRouting(
+      routingConfig,
+      { groupFolder: 'private-group', messageSourceId: 'message-42' },
+      randomUUID(),
+      {
+        createDirectory: () => undefined,
+        writeExclusiveFile: () => undefined,
+        removeFile: (filePath) => {
+          attempts += 1;
+          if (attempts === 1) throw new Error('routing file is busy');
+          removed.push(filePath);
+        },
+      },
+    );
+
+    prepared.cleanup();
+    expect(removed).toEqual([]);
+    cleanupActiveTwoGatesRoutingFiles();
+    expect(removed).toEqual([prepared.mounts[0].hostPath]);
+  });
+
   it('removes crash residue without touching unrelated runtime files', () => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), 'nanoclaw-routing-cleanup-test-'),

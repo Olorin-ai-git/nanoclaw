@@ -163,8 +163,13 @@ export function cleanupStaleTwoGatesRoutingFiles(
           entry.name,
         )
       ) {
-        fs.rmSync(path.join(directory, entry.name));
-        removed++;
+        const routingFile = path.join(directory, entry.name);
+        try {
+          fs.rmSync(routingFile);
+          removed++;
+        } catch (err) {
+          logger.warn({ err, routingFile }, 'Failed to clean stale routing file');
+        }
       }
     }
   } catch (err) {
@@ -223,16 +228,15 @@ export function prepareTwoGatesRouting(
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return;
-    cleaned = true;
     try {
       operations.removeFile(routingFile);
+      cleaned = true;
+      activeRoutingCleanups.delete(cleanup);
     } catch (err) {
       logger.warn(
         { err, routingFile },
         'Failed to remove TwoGates routing file',
       );
-    } finally {
-      activeRoutingCleanups.delete(cleanup);
     }
   };
   activeRoutingCleanups.add(cleanup);
@@ -601,7 +605,12 @@ export async function runContainerAgent(
   );
 
   const logsDir = path.join(groupDir, 'logs');
-  fs.mkdirSync(logsDir, { recursive: true });
+  try {
+    fs.mkdirSync(logsDir, { recursive: true });
+  } catch (err) {
+    routingRun.cleanup();
+    throw err;
+  }
 
   return new Promise((resolve, reject) => {
     let container: ChildProcess | undefined;
@@ -611,6 +620,11 @@ export async function runContainerAgent(
       });
 
       onProcess(container, containerName);
+      container.stdin?.once('error', (err) => {
+        routingRun.cleanup();
+        container?.kill('SIGKILL');
+        reject(err);
+      });
       container.stdin?.write(JSON.stringify(effectiveInput));
       container.stdin?.end();
     } catch (err) {
@@ -770,13 +784,16 @@ export async function runContainerAgent(
             { group: group.name, containerName, duration, code },
             'Container timed out after output (idle cleanup)',
           );
-          outputChain.then(() => {
-            resolve({
-              status: 'success',
-              result: null,
-              newSessionId,
-            });
-          });
+          outputChain.then(
+            () => {
+              resolve({
+                status: 'success',
+                result: null,
+                newSessionId,
+              });
+            },
+            reject,
+          );
           return;
         }
 
@@ -881,17 +898,20 @@ export async function runContainerAgent(
 
       // Streaming mode: wait for output chain to settle, return completion marker
       if (onOutput) {
-        outputChain.then(() => {
-          logger.info(
-            { group: group.name, duration, newSessionId },
-            'Container completed (streaming mode)',
-          );
-          resolve({
-            status: 'success',
-            result: null,
-            newSessionId,
-          });
-        });
+        outputChain.then(
+          () => {
+            logger.info(
+              { group: group.name, duration, newSessionId },
+              'Container completed (streaming mode)',
+            );
+            resolve({
+              status: 'success',
+              result: null,
+              newSessionId,
+            });
+          },
+          reject,
+        );
         return;
       }
 
