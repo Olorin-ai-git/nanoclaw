@@ -131,7 +131,9 @@ function parsePositiveInteger(
   }
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed > maximum) {
-    throw new Error(`${key} must be a safe positive integer no greater than ${maximum}`);
+    throw new Error(
+      `${key} must be a safe positive integer no greater than ${maximum}`,
+    );
   }
   return parsed;
 }

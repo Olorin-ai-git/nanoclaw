@@ -138,7 +138,8 @@ export function sourceTreeRequiresSync(
       }
     } else if (
       entry.isFile() &&
-      (!fs.existsSync(destinationPath) || !fs.statSync(destinationPath).isFile())
+      (!fs.existsSync(destinationPath) ||
+        !fs.statSync(destinationPath).isFile())
     ) {
       return true;
     }
