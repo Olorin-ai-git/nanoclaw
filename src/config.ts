@@ -3,14 +3,27 @@ import path from 'path';
 
 import { readEnvFile } from './env.js';
 import { isValidTimezone } from './timezone.js';
+import {
+  loadTwoGatesRoutingConfig,
+  TWOGATES_ENV_KEYS,
+} from './twogates-routing.js';
 
 // Read config values from .env (falls back to process.env).
 const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'ONECLI_URL',
+  'NODE_ENV',
   'TZ',
+  ...TWOGATES_ENV_KEYS,
 ]);
+
+const runtimeEnv = Object.fromEntries(
+  TWOGATES_ENV_KEYS.map((key) => [key, process.env[key] || envConfig[key]]),
+);
+runtimeEnv.NODE_ENV = process.env.NODE_ENV || envConfig.NODE_ENV;
+
+export const TWOGATES_ROUTING = loadTwoGatesRoutingConfig(runtimeEnv);
 
 export const ASSISTANT_NAME =
   process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';

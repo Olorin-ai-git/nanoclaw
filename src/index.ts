@@ -22,6 +22,8 @@ import {
 } from './channels/registry.js';
 import {
   ContainerOutput,
+  cleanupActiveTwoGatesRoutingFiles,
+  cleanupStaleTwoGatesRoutingFiles,
   runContainerAgent,
   writeGroupsSnapshot,
   writeTasksSnapshot,
@@ -348,33 +350,39 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    missedMessages[missedMessages.length - 1].id,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
+        clearIpcResponseWatchdog(chatJid);
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-      clearIpcResponseWatchdog(chatJid);
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -407,6 +415,7 @@ async function runAgent(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
+  messageSourceId: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
@@ -457,6 +466,7 @@ async function runAgent(
         sessionId,
         groupFolder: group.folder,
         chatJid,
+        messageSourceId,
         isMain,
         assistantName: ASSISTANT_NAME,
       },
@@ -582,7 +592,13 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          if (
+            queue.sendMessage(
+              chatJid,
+              formatted,
+              messagesToSend[messagesToSend.length - 1].id,
+            )
+          ) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
@@ -633,6 +649,7 @@ function recoverPendingMessages(): void {
 }
 
 function ensureContainerSystemRunning(): void {
+  cleanupStaleTwoGatesRoutingFiles();
   ensureContainerRuntimeRunning();
   cleanupOrphans();
 }
@@ -655,6 +672,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     await queue.shutdown(10000);
+    cleanupActiveTwoGatesRoutingFiles();
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
   };

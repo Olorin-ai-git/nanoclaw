@@ -5,7 +5,7 @@
  * Input protocol:
  *   Stdin: Full ContainerInput JSON (read until EOF, like before)
  *   IPC:   Follow-up messages written as JSON files to /workspace/ipc/input/
- *          Files: {type:"message", text:"..."}.json — polled and consumed
+ *          Files: {type:"message", text:"...", messageId:"<sha256>"}.json
  *          Sentinel: /workspace/ipc/input/_close — signals session end
  *
  * Stdout protocol:
@@ -17,12 +17,21 @@
 import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
+import { randomUUID } from 'crypto';
 import {
   query,
   HookCallback,
   PreCompactHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import {
+  buildRoutedSdkEnvironment,
+  latestCorrelatedMessageId,
+  loadProviderRoutingConfig,
+  ProviderBridge,
+  ProviderCorrelation,
+  startProviderBridge,
+} from './provider-routing.js';
 
 interface ContainerInput {
   prompt: string;
@@ -33,6 +42,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  routing?: ProviderCorrelation;
 }
 
 interface ContainerOutput {
@@ -58,6 +68,11 @@ interface SDKUserMessage {
   message: { role: 'user'; content: string };
   parent_tool_use_id: null;
   session_id: string;
+}
+
+interface IpcInputMessage {
+  text: string;
+  messageId?: string;
 }
 
 const IPC_INPUT_DIR = '/workspace/ipc/input';
@@ -118,13 +133,13 @@ const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 function writeOutput(output: ContainerOutput): void {
-  console.log(OUTPUT_START_MARKER);
-  console.log(JSON.stringify(output));
-  console.log(OUTPUT_END_MARKER);
+  process.stdout.write(`${OUTPUT_START_MARKER}\n`);
+  process.stdout.write(`${JSON.stringify(output)}\n`);
+  process.stdout.write(`${OUTPUT_END_MARKER}\n`);
 }
 
 function log(message: string): void {
-  console.error(`[agent-runner] ${message}`);
+  process.stderr.write(`[agent-runner] ${message}\n`);
 }
 
 function getSessionSummary(
@@ -308,7 +323,7 @@ function shouldClose(): boolean {
  * Drain all pending IPC input messages.
  * Returns messages found, or empty array.
  */
-function drainIpcInput(): string[] {
+function drainIpcInput(): IpcInputMessage[] {
   try {
     fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
     const files = fs
@@ -316,14 +331,23 @@ function drainIpcInput(): string[] {
       .filter((f) => f.endsWith('.json'))
       .sort();
 
-    const messages: string[] = [];
+    const messages: IpcInputMessage[] = [];
     for (const file of files) {
       const filePath = path.join(IPC_INPUT_DIR, file);
       try {
         const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
         fs.unlinkSync(filePath);
-        if (data.type === 'message' && data.text) {
-          messages.push(data.text);
+        if (
+          data.type === 'message' &&
+          typeof data.text === 'string' &&
+          data.text
+        ) {
+          const messageId =
+            typeof data.messageId === 'string' &&
+            /^[0-9a-f]{64}$/.test(data.messageId)
+              ? data.messageId
+              : undefined;
+          messages.push({ text: data.text, messageId });
         }
       } catch (err) {
         log(
@@ -347,8 +371,10 @@ function drainIpcInput(): string[] {
  * Wait for a new IPC message or _close sentinel.
  * Returns the messages as a single string, or null if _close.
  */
-function waitForIpcMessage(): Promise<string | null> {
-  return new Promise((resolve) => {
+function waitForIpcMessage(
+  correlationRequired: boolean,
+): Promise<IpcInputMessage | null> {
+  return new Promise((resolve, reject) => {
     const poll = () => {
       if (shouldClose()) {
         resolve(null);
@@ -356,7 +382,14 @@ function waitForIpcMessage(): Promise<string | null> {
       }
       const messages = drainIpcInput();
       if (messages.length > 0) {
-        resolve(messages.join('\n'));
+        try {
+          resolve({
+            text: messages.map((message) => message.text).join('\n'),
+            messageId: latestCorrelatedMessageId(messages, correlationRequired),
+          });
+        } catch (error) {
+          reject(error);
+        }
         return;
       }
       setTimeout(poll, IPC_POLL_MS);
@@ -385,10 +418,12 @@ async function runQuery(
 }> {
   const stream = new MessageStream();
   stream.push(prompt);
+  const queryAbortController = new AbortController();
 
   // Poll IPC for follow-up messages and _close sentinel during the query
   let ipcPolling = true;
   let closedDuringQuery = false;
+  let ipcCorrelationError: Error | undefined;
   const pollIpcDuringQuery = () => {
     if (!ipcPolling) return;
     if (shouldClose()) {
@@ -399,9 +434,28 @@ async function runQuery(
       return;
     }
     const messages = drainIpcInput();
-    for (const text of messages) {
-      log(`Piping IPC message into active query (${text.length} chars)`);
-      stream.push(text);
+    let messageId: string | undefined;
+    try {
+      messageId = latestCorrelatedMessageId(
+        messages,
+        Boolean(containerInput.routing),
+      );
+    } catch (error) {
+      ipcCorrelationError =
+        error instanceof Error ? error : new Error(String(error));
+      log(ipcCorrelationError.message);
+      ipcPolling = false;
+      queryAbortController.abort();
+      return;
+    }
+    if (containerInput.routing && messageId) {
+      containerInput.routing.messageId = messageId;
+    }
+    for (const message of messages) {
+      log(
+        `Piping IPC message into active query (${message.text.length} chars)`,
+      );
+      stream.push(message.text);
     }
     setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
   };
@@ -471,6 +525,7 @@ async function runQuery(
         'mcp__nanoclaw__*',
       ],
       env: sdkEnv,
+      abortController: queryAbortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
@@ -536,6 +591,8 @@ async function runQuery(
       });
     }
   }
+
+  if (ipcCorrelationError) throw ipcCorrelationError;
 
   ipcPolling = false;
   log(
@@ -621,12 +678,38 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
-  // No real secrets exist in the container environment.
-  const sdkEnv: Record<string, string | undefined> = {
-    ...process.env,
-    CLAUDE_CODE_AUTO_COMPACT_WINDOW: '165000',
-  };
+  let providerBridge: ProviderBridge | undefined;
+  let sdkEnv: Record<string, string | undefined>;
+  const routingConfigPath = process.env.NANOCLAW_TWOGATES_CONFIG_PATH;
+  try {
+    if (routingConfigPath) {
+      if (!containerInput.routing) {
+        throw new Error('TwoGates routing correlation is missing');
+      }
+      const routingConfig = loadProviderRoutingConfig(routingConfigPath);
+      providerBridge = await startProviderBridge(
+        routingConfig,
+        () => containerInput.routing!,
+        {
+          requestId: randomUUID,
+          log: (fields, message) => log(`${message} ${JSON.stringify(fields)}`),
+        },
+      );
+      sdkEnv = buildRoutedSdkEnvironment(process.env, providerBridge.origin);
+      log('TwoGates provider-only bridge ready on loopback');
+    } else {
+      sdkEnv = { ...process.env };
+    }
+    sdkEnv.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '165000';
+  } catch (err) {
+    await providerBridge?.close();
+    providerBridge = undefined;
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    log(`TwoGates provider routing failed: ${errorMessage}`);
+    writeOutput({ status: 'error', result: null, error: errorMessage });
+    process.exitCode = 1;
+    return;
+  }
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
@@ -649,7 +732,25 @@ async function main(): Promise<void> {
   const pending = drainIpcInput();
   if (pending.length > 0) {
     log(`Draining ${pending.length} pending IPC messages into initial prompt`);
-    prompt += '\n' + pending.join('\n');
+    let pendingMessageId: string | undefined;
+    try {
+      pendingMessageId = latestCorrelatedMessageId(
+        pending,
+        Boolean(containerInput.routing),
+      );
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      log(errorMessage);
+      writeOutput({ status: 'error', result: null, error: errorMessage });
+      await providerBridge?.close();
+      providerBridge = undefined;
+      process.exitCode = 1;
+      return;
+    }
+    if (containerInput.routing && pendingMessageId) {
+      containerInput.routing.messageId = pendingMessageId;
+    }
+    prompt += '\n' + pending.map((message) => message.text).join('\n');
   }
 
   // Script phase: run script before waking agent
@@ -666,6 +767,8 @@ async function main(): Promise<void> {
         status: 'success',
         result: null,
       });
+      await providerBridge?.close();
+      providerBridge = undefined;
       return;
     }
 
@@ -711,14 +814,23 @@ async function main(): Promise<void> {
       log('Query ended, waiting for next IPC message...');
 
       // Wait for the next message or _close sentinel
-      const nextMessage = await waitForIpcMessage();
+      const nextMessage = await waitForIpcMessage(
+        Boolean(containerInput.routing),
+      );
       if (nextMessage === null) {
         log('Close sentinel received, exiting');
         break;
       }
 
-      log(`Got new message (${nextMessage.length} chars), starting new query`);
-      prompt = nextMessage;
+      if (containerInput.routing && nextMessage.messageId) {
+        containerInput.routing.messageId = nextMessage.messageId;
+      } else if (containerInput.routing) {
+        throw new Error('TwoGates follow-up message correlation is missing');
+      }
+      log(
+        `Got new message (${nextMessage.text.length} chars), starting new query`,
+      );
+      prompt = nextMessage.text;
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -729,7 +841,9 @@ async function main(): Promise<void> {
       newSessionId: sessionId,
       error: errorMessage,
     });
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    await providerBridge?.close();
   }
 }
 
