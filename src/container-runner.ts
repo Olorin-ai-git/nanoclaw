@@ -168,7 +168,10 @@ export function cleanupStaleTwoGatesRoutingFiles(
           fs.rmSync(routingFile);
           removed++;
         } catch (err) {
-          logger.warn({ err, routingFile }, 'Failed to clean stale routing file');
+          logger.warn(
+            { err, routingFile },
+            'Failed to clean stale routing file',
+          );
         }
       }
     }
@@ -784,16 +787,13 @@ export async function runContainerAgent(
             { group: group.name, containerName, duration, code },
             'Container timed out after output (idle cleanup)',
           );
-          outputChain.then(
-            () => {
-              resolve({
-                status: 'success',
-                result: null,
-                newSessionId,
-              });
-            },
-            reject,
-          );
+          outputChain.then(() => {
+            resolve({
+              status: 'success',
+              result: null,
+              newSessionId,
+            });
+          }, reject);
           return;
         }
 
@@ -898,20 +898,17 @@ export async function runContainerAgent(
 
       // Streaming mode: wait for output chain to settle, return completion marker
       if (onOutput) {
-        outputChain.then(
-          () => {
-            logger.info(
-              { group: group.name, duration, newSessionId },
-              'Container completed (streaming mode)',
-            );
-            resolve({
-              status: 'success',
-              result: null,
-              newSessionId,
-            });
-          },
-          reject,
-        );
+        outputChain.then(() => {
+          logger.info(
+            { group: group.name, duration, newSessionId },
+            'Container completed (streaming mode)',
+          );
+          resolve({
+            status: 'success',
+            result: null,
+            newSessionId,
+          });
+        }, reject);
         return;
       }
 
