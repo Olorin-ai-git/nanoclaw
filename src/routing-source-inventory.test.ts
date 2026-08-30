@@ -28,7 +28,9 @@ interface ContainerAgentInvocation {
   hasMessageSourceId: boolean;
 }
 
-function containerAgentInvocations(filePath: string): ContainerAgentInvocation[] {
+function containerAgentInvocations(
+  filePath: string,
+): ContainerAgentInvocation[] {
   const contents = source(filePath);
   const syntax = ts.createSourceFile(
     filePath,
@@ -53,13 +55,15 @@ function containerAgentInvocations(filePath: string): ContainerAgentInvocation[]
             (ts.isShorthandPropertyAssignment(property) &&
               property.name.text === 'messageSourceId') ||
             (ts.isPropertyAssignment(property) &&
-              ((ts.isIdentifier(property.name) && property.name.text === 'messageSourceId') ||
+              ((ts.isIdentifier(property.name) &&
+                property.name.text === 'messageSourceId') ||
                 (ts.isStringLiteral(property.name) &&
                   property.name.text === 'messageSourceId'))),
         );
       calls.push({
         filePath,
-        line: syntax.getLineAndCharacterOfPosition(node.getStart(syntax)).line + 1,
+        line:
+          syntax.getLineAndCharacterOfPosition(node.getStart(syntax)).line + 1,
         hasMessageSourceId,
       });
     }
@@ -103,12 +107,18 @@ describe('TwoGates production source inventory', () => {
       invocations
         .map((call) => path.relative(projectRoot, call.filePath))
         .sort(),
-    ).toEqual(['scripts/run-agent.ts', 'src/index.ts', 'src/task-scheduler.ts']);
+    ).toEqual([
+      'scripts/run-agent.ts',
+      'src/index.ts',
+      'src/task-scheduler.ts',
+    ]);
     expect(
-      invocations.filter((call) => !call.hasMessageSourceId).map((call) => ({
-        file: path.relative(projectRoot, call.filePath),
-        line: call.line,
-      })),
+      invocations
+        .filter((call) => !call.hasMessageSourceId)
+        .map((call) => ({
+          file: path.relative(projectRoot, call.filePath),
+          line: call.line,
+        })),
     ).toEqual([]);
 
     expect(source(path.join(hostSourceRoot, 'index.ts'))).toMatch(
