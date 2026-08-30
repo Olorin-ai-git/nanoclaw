@@ -38,7 +38,8 @@ import {
   getAllSessions,
   deleteSession,
   getAllTasks,
-  getLastBotMessageTimestamp,
+  getLastBotMessageCursor,
+  messageCursor,
   getMessagesSince,
   getNewMessages,
   getRouterState,
@@ -188,15 +189,12 @@ function getOrRecoverCursor(chatJid: string): string {
   const existing = lastAgentTimestamp[chatJid];
   if (existing) return existing;
 
-  const botTs = getLastBotMessageTimestamp(chatJid, ASSISTANT_NAME);
-  if (botTs) {
-    logger.info(
-      { chatJid, recoveredFrom: botTs },
-      'Recovered message cursor from last bot reply',
-    );
-    lastAgentTimestamp[chatJid] = botTs;
+  const botCursor = getLastBotMessageCursor(chatJid, ASSISTANT_NAME);
+  if (botCursor) {
+    logger.info({ chatJid }, 'Recovered message cursor from last bot reply');
+    lastAgentTimestamp[chatJid] = botCursor;
     saveState();
-    return botTs;
+    return botCursor;
   }
   return '';
 }
@@ -323,8 +321,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
   const previousCursor = lastAgentTimestamp[chatJid] || '';
-  lastAgentTimestamp[chatJid] =
-    missedMessages[missedMessages.length - 1].timestamp;
+  lastAgentTimestamp[chatJid] = messageCursor(
+    missedMessages[missedMessages.length - 1],
+  );
   saveState();
 
   logger.info(
@@ -604,8 +603,9 @@ async function startMessageLoop(): Promise<void> {
               'Piped messages to active container',
             );
             startIpcResponseWatchdog(chatJid);
-            lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
+            lastAgentTimestamp[chatJid] = messageCursor(
+              messagesToSend[messagesToSend.length - 1],
+            );
             saveState();
             // Show typing indicator while the container processes the piped message
             channel
