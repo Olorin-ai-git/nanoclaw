@@ -600,27 +600,39 @@ export async function runContainerAgent(
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
-  return new Promise((resolve) => {
-    const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+  return new Promise((resolve, reject) => {
+    let container: ChildProcess | undefined;
+    try {
+      container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
 
-    onProcess(container, containerName);
+      onProcess(container, containerName);
+      container.stdin?.write(JSON.stringify(effectiveInput));
+      container.stdin?.end();
+    } catch (err) {
+      routingRun.cleanup();
+      container?.kill('SIGKILL');
+      reject(err);
+      return;
+    }
+    if (!container) {
+      routingRun.cleanup();
+      reject(new Error('Container runtime did not return a child process'));
+      return;
+    }
 
     let stdout = '';
     let stderr = '';
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    container.stdin.write(JSON.stringify(effectiveInput));
-    container.stdin.end();
-
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
     let parseBuffer = '';
     let newSessionId: string | undefined;
     let outputChain = Promise.resolve();
 
-    container.stdout.on('data', (data) => {
+    container.stdout!.on('data', (data) => {
       const chunk = data.toString();
 
       // Always accumulate for logging
@@ -672,7 +684,7 @@ export async function runContainerAgent(
       }
     });
 
-    container.stderr.on('data', (data) => {
+    container.stderr!.on('data', (data) => {
       const chunk = data.toString();
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
