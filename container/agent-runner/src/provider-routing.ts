@@ -460,6 +460,7 @@ export function buildRoutedSdkEnvironment(
   environment.ANTHROPIC_BASE_URL = bridgeOrigin;
   environment.ANTHROPIC_API_KEY = ROUTED_AUTH_MARKER;
   environment.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
+  environment.CLAUDE_CODE_MAX_RETRIES = '0';
   return environment;
 }
 

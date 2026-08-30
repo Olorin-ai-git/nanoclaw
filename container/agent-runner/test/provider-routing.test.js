@@ -445,6 +445,7 @@ test('provider bridge uses dual TLS, Bearer CONNECT auth, and exact correlation 
     assert.equal(environment.CLAUDE_CODE_OAUTH_TOKEN, undefined);
     assert.equal(environment.ANTHROPIC_AUTH_TOKEN, undefined);
     assert.equal(environment.ANTHROPIC_API_KEY, 'twogates-managed');
+    assert.equal(environment.CLAUDE_CODE_MAX_RETRIES, '0');
 
     assert.equal(await requestAbsoluteUri(bridge.origin), 400);
     assert.match(await requestConnect(bridge.origin), /^HTTP\/1\.1 405 /);
