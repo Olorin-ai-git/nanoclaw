@@ -30,7 +30,7 @@ export interface EnabledTwoGatesRouting {
   proxyUrl: string;
   proxyCredential: string;
   caCertPath: string;
-  taskClass: string;
+  taskClass: 'cheap_bulk' | 'standard' | 'heavy';
   anthropicOrigin: string;
   connectTimeoutMs: number;
   requestTimeoutMs: number;
@@ -118,13 +118,6 @@ function parseHttpsUrl(value: string, key: string): string {
   return parsed.origin;
 }
 
-function parseHeaderValue(value: string, key: string): string {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) {
-    throw new Error(`${key} contains characters that are unsafe in a header`);
-  }
-  return value;
-}
-
 function parsePositiveInteger(env: EnvironmentSource, key: string): number {
   const value = requiredValue(env, key);
   if (!/^[1-9][0-9]*$/.test(value)) {
@@ -155,7 +148,7 @@ export function loadTwoGatesRoutingConfig(
     'TWOGATES_PROXY_URL',
   );
   const proxyCredential = requiredValue(env, 'TWOGATES_PROXY_CREDENTIAL');
-  if (!/^tg_[0-9a-f]{4,}_[0-9a-f]{16,}$/.test(proxyCredential)) {
+  if (!/^tg_[0-9a-f]{16}_[0-9a-f]{48}$/.test(proxyCredential)) {
     throw new Error(
       'TWOGATES_PROXY_CREDENTIAL must be a valid TwoGates agent token',
     );
@@ -169,10 +162,13 @@ export function loadTwoGatesRoutingConfig(
     throw new Error('TWOGATES_CA_CERT_PATH must reference a readable file');
   }
 
-  const taskClass = parseHeaderValue(
-    requiredValue(env, 'TWOGATES_TASK_CLASS'),
-    'TWOGATES_TASK_CLASS',
-  );
+  const rawTaskClass = requiredValue(env, 'TWOGATES_TASK_CLASS');
+  if (!['cheap_bulk', 'standard', 'heavy'].includes(rawTaskClass)) {
+    throw new Error(
+      'TWOGATES_TASK_CLASS must use an approved Erebor task class',
+    );
+  }
+  const taskClass = rawTaskClass as EnabledTwoGatesRouting['taskClass'];
   const anthropicOrigin = parseHttpsUrl(
     requiredValue(env, 'TWOGATES_ANTHROPIC_ORIGIN'),
     'TWOGATES_ANTHROPIC_ORIGIN',

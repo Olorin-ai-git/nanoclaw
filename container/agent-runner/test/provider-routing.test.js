@@ -160,9 +160,9 @@ test('provider routing file rejects malformed secrets and unsafe paths', (t) => 
   const configPath = path.join(directory, 'routing.json');
   const config = {
     proxyUrl: 'https://proxy.example.test:8443',
-    proxyCredential: `tg_abcd_${'1'.repeat(16)}`,
+    proxyCredential: `tg_${'a'.repeat(16)}_${'1'.repeat(48)}`,
     caCertPath: '/run/nanoclaw/twogates/ca.pem',
-    taskClass: 'agentic.medium',
+    taskClass: 'standard',
     anthropicOrigin: 'https://api.anthropic.test',
     connectTimeoutMs: 5000,
     requestTimeoutMs: 5000,
@@ -182,6 +182,15 @@ test('provider routing file rejects malformed secrets and unsafe paths', (t) => 
   assert.throws(
     () => loadProviderRoutingConfig(configPath),
     /valid TwoGates agent token/,
+  );
+
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({ ...config, taskClass: 'agentic.medium' }),
+  );
+  assert.throws(
+    () => loadProviderRoutingConfig(configPath),
+    /approved Erebor task class/,
   );
 
   fs.writeFileSync(
@@ -316,9 +325,9 @@ test('provider bridge uses dual TLS, Bearer CONNECT auth, and exact correlation 
     const unrelatedPort = await listen(unrelatedServer);
     const routingConfig = {
       proxyUrl: `https://localhost:${proxyPort}`,
-      proxyCredential: `tg_abcd_${'1'.repeat(16)}`,
+      proxyCredential: `tg_${'a'.repeat(16)}_${'1'.repeat(48)}`,
       caCertPath: path.join(certificateDirectory, 'ca.pem'),
-      taskClass: 'agentic.medium',
+      taskClass: 'standard',
       anthropicOrigin: 'https://api.anthropic.test:443',
       connectTimeoutMs: 5000,
       requestTimeoutMs: 5000,
@@ -356,7 +365,7 @@ test('provider bridge uses dual TLS, Bearer CONNECT auth, and exact correlation 
     assert.match(
       observed.connectHead,
       new RegExp(
-        `^Proxy-Authorization: Bearer tg_abcd_${'1'.repeat(16)}$`,
+        `^Proxy-Authorization: Bearer tg_${'a'.repeat(16)}_${'1'.repeat(48)}$`,
         'im',
       ),
     );
@@ -371,7 +380,7 @@ test('provider bridge uses dual TLS, Bearer CONNECT auth, and exact correlation 
     );
     assert.match(
       observed.providerHead,
-      /^x-erebor-task-class: agentic\.medium$/im,
+      /^x-erebor-task-class: standard$/im,
     );
     assert.match(
       observed.providerHead,

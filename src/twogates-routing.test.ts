@@ -15,9 +15,9 @@ const readableCa: RoutingConfigDependencies = {
 const enabledEnvironment = {
   NANOCLAW_ENV: 'production',
   TWOGATES_PROXY_URL: 'https://proxy.example.test:8443',
-  TWOGATES_PROXY_CREDENTIAL: `tg_abcd_${'1'.repeat(16)}`,
+  TWOGATES_PROXY_CREDENTIAL: `tg_${'a'.repeat(16)}_${'1'.repeat(48)}`,
   TWOGATES_CA_CERT_PATH: '/secrets/twogates-ca.pem',
-  TWOGATES_TASK_CLASS: 'agentic.medium',
+  TWOGATES_TASK_CLASS: 'standard',
   TWOGATES_ANTHROPIC_ORIGIN: 'https://anthropic.example.test',
   TWOGATES_CONNECT_TIMEOUT_MS: '5000',
   TWOGATES_REQUEST_TIMEOUT_MS: '120000',
@@ -48,7 +48,7 @@ describe('loadTwoGatesRoutingConfig', () => {
       proxyUrl: 'https://proxy.example.test:8443',
       proxyCredential: enabledEnvironment.TWOGATES_PROXY_CREDENTIAL,
       caCertPath: '/secrets/twogates-ca.pem',
-      taskClass: 'agentic.medium',
+      taskClass: 'standard',
       anthropicOrigin: 'https://anthropic.example.test',
       connectTimeoutMs: 5000,
       requestTimeoutMs: 120000,
@@ -113,10 +113,10 @@ describe('loadTwoGatesRoutingConfig', () => {
     ).toThrow('valid TwoGates agent token');
     expect(() =>
       loadTwoGatesRoutingConfig(
-        { ...enabledEnvironment, TWOGATES_TASK_CLASS: 'bad\nheader' },
+        { ...enabledEnvironment, TWOGATES_TASK_CLASS: 'agentic.medium' },
         readableCa,
       ),
-    ).toThrow('unsafe in a header');
+    ).toThrow('approved Erebor task class');
     expect(() =>
       loadTwoGatesRoutingConfig(
         { ...enabledEnvironment, TWOGATES_CA_CERT_PATH: 'relative.pem' },

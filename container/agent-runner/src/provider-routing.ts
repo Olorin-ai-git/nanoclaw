@@ -8,7 +8,7 @@ export interface ProviderRoutingConfig {
   proxyUrl: string;
   proxyCredential: string;
   caCertPath: string;
-  taskClass: string;
+  taskClass: 'cheap_bulk' | 'standard' | 'heavy';
   anthropicOrigin: string;
   connectTimeoutMs: number;
   requestTimeoutMs: number;
@@ -122,17 +122,18 @@ export function loadProviderRoutingConfig(
     value.proxyCredential,
     'proxyCredential',
   );
-  if (!/^tg_[0-9a-f]{4,}_[0-9a-f]{16,}$/.test(proxyCredential)) {
+  if (!/^tg_[0-9a-f]{16}_[0-9a-f]{48}$/.test(proxyCredential)) {
     throw new Error('proxyCredential must be a valid TwoGates agent token');
   }
   const caCertPath = requireString(value.caCertPath, 'caCertPath');
   if (!path.isAbsolute(caCertPath)) {
     throw new Error('caCertPath must be an absolute path');
   }
-  const taskClass = requireString(value.taskClass, 'taskClass');
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(taskClass)) {
-    throw new Error('taskClass contains unsafe header characters');
+  const rawTaskClass = requireString(value.taskClass, 'taskClass');
+  if (!['cheap_bulk', 'standard', 'heavy'].includes(rawTaskClass)) {
+    throw new Error('taskClass must use an approved Erebor task class');
   }
+  const taskClass = rawTaskClass as ProviderRoutingConfig['taskClass'];
 
   return {
     proxyUrl: requireHttpsOrigin(value.proxyUrl, 'proxyUrl'),
