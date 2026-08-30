@@ -48,6 +48,19 @@ export function latestCorrelatedMessageId(
   return undefined;
 }
 
+export function prepareRoutedFollowUp(
+  messages: ReadonlyArray<{ text: string; messageId?: string }>,
+  routingEnabled: boolean,
+): { text: string; messageId: string } | undefined {
+  if (!routingEnabled || messages.length === 0) return undefined;
+  const messageId = latestCorrelatedMessageId(messages, true);
+  if (!messageId) throw new Error('TwoGates follow-up message correlation is missing');
+  return {
+    text: messages.map((message) => message.text).join('\n'),
+    messageId,
+  };
+}
+
 const LOOPBACK_HOST = '127.0.0.1';
 const ROUTED_AUTH_MARKER = 'twogates-managed';
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;

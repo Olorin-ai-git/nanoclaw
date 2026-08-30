@@ -27,6 +27,7 @@ import { fileURLToPath } from 'url';
 import {
   buildRoutedSdkEnvironment,
   latestCorrelatedMessageId,
+  prepareRoutedFollowUp,
   loadProviderRoutingConfig,
   ProviderBridge,
   ProviderCorrelation,
@@ -415,6 +416,7 @@ async function runQuery(
   newSessionId?: string;
   lastAssistantUuid?: string;
   closedDuringQuery: boolean;
+  pendingFollowUp?: { text: string; messageId: string };
 }> {
   const stream = new MessageStream();
   stream.push(prompt);
@@ -424,6 +426,7 @@ async function runQuery(
   let ipcPolling = true;
   let ipcPollTimer: ReturnType<typeof setTimeout> | undefined;
   let closedDuringQuery = false;
+  let pendingFollowUp: { text: string; messageId: string } | undefined;
   let ipcCorrelationError: Error | undefined;
   const scheduleIpcPoll = () => {
     ipcPollTimer = setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
@@ -438,9 +441,8 @@ async function runQuery(
       return;
     }
     const messages = drainIpcInput();
-    let messageId: string | undefined;
     try {
-      messageId = latestCorrelatedMessageId(
+      pendingFollowUp = prepareRoutedFollowUp(
         messages,
         Boolean(containerInput.routing),
       );
@@ -452,8 +454,11 @@ async function runQuery(
       queryAbortController.abort();
       return;
     }
-    if (containerInput.routing && messageId) {
-      containerInput.routing.messageId = messageId;
+    if (pendingFollowUp) {
+      log('Routed follow-up queued for a separately correlated query turn');
+      ipcPolling = false;
+      stream.end();
+      return;
     }
     for (const message of messages) {
       log(
@@ -606,7 +611,12 @@ async function runQuery(
   log(
     `Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`,
   );
-  return { newSessionId, lastAssistantUuid, closedDuringQuery };
+  return {
+    newSessionId,
+    lastAssistantUuid,
+    closedDuringQuery,
+    pendingFollowUp,
+  };
 }
 
 interface ScriptResult {
@@ -814,6 +824,16 @@ async function main(): Promise<void> {
       if (queryResult.closedDuringQuery) {
         log('Close sentinel consumed during query, exiting');
         break;
+      }
+
+      if (queryResult.pendingFollowUp) {
+        if (!containerInput.routing) {
+          throw new Error('Received routed follow-up state while routing is disabled');
+        }
+        containerInput.routing.messageId = queryResult.pendingFollowUp.messageId;
+        prompt = queryResult.pendingFollowUp.text;
+        log('Starting separately correlated routed follow-up query');
+        continue;
       }
 
       // Emit session update so host can track it

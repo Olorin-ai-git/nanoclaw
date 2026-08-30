@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import {
   buildRoutedSdkEnvironment,
   latestCorrelatedMessageId,
+  prepareRoutedFollowUp,
   loadProviderRoutingConfig,
   startProviderBridge,
 } from '../dist/provider-routing.js';
@@ -221,6 +222,20 @@ test('routed follow-up messages require fresh correlation', () => {
       true,
     ),
     'b'.repeat(64),
+  );
+  assert.deepEqual(
+    prepareRoutedFollowUp(
+      [
+        { text: 'first', messageId: 'a'.repeat(64) },
+        { text: 'second', messageId: 'b'.repeat(64) },
+      ],
+      true,
+    ),
+    { text: 'first\nsecond', messageId: 'b'.repeat(64) },
+  );
+  assert.equal(
+    prepareRoutedFollowUp([{ text: 'direct mode' }], false),
+    undefined,
   );
 });
 
