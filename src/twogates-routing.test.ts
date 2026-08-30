@@ -35,10 +35,10 @@ describe('loadTwoGatesRoutingConfig', () => {
     });
   });
 
-  it('fails closed when the standard Node environment marks production', () => {
-    expect(() =>
+  it('leaves production routing disabled when no values are configured', () => {
+    expect(
       loadTwoGatesRoutingConfig({ NODE_ENV: 'production' }, readableCa),
-    ).toThrow('TWOGATES_PROXY_URL is required');
+    ).toEqual({ mode: 'disabled', environment: 'production' });
   });
 
   it('loads a complete production routing contract', () => {
@@ -153,6 +153,18 @@ describe('loadTwoGatesRoutingConfig', () => {
         readableCa,
       ),
     ).toThrow('must be a positive integer');
+  });
+
+  it('rejects timeout values beyond the Node timer ceiling', () => {
+    expect(() =>
+      loadTwoGatesRoutingConfig(
+        {
+          ...enabledEnvironment,
+          TWOGATES_REQUEST_TIMEOUT_MS: String(2 ** 31),
+        },
+        readableCa,
+      ),
+    ).toThrow('no greater than 2147483647');
   });
 });
 

@@ -21,7 +21,7 @@ export type NanoClawEnvironment = 'development' | 'test' | 'production';
 
 export interface DisabledTwoGatesRouting {
   mode: 'disabled';
-  environment: Exclude<NanoClawEnvironment, 'production'>;
+  environment: NanoClawEnvironment;
 }
 
 export interface EnabledTwoGatesRouting {
@@ -51,6 +51,8 @@ export interface EreborRunCorrelation {
 }
 
 type EnvironmentSource = Record<string, string | undefined>;
+
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
 export interface RoutingConfigDependencies {
   isAbsolutePath: (value: string) => boolean;
@@ -118,14 +120,18 @@ function parseHttpsUrl(value: string, key: string): string {
   return parsed.origin;
 }
 
-function parsePositiveInteger(env: EnvironmentSource, key: string): number {
+function parsePositiveInteger(
+  env: EnvironmentSource,
+  key: string,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number {
   const value = requiredValue(env, key);
   if (!/^[1-9][0-9]*$/.test(value)) {
     throw new Error(`${key} must be a positive integer`);
   }
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`${key} must be a safe positive integer`);
+  if (!Number.isSafeInteger(parsed) || parsed > maximum) {
+    throw new Error(`${key} must be a safe positive integer no greater than ${maximum}`);
   }
   return parsed;
 }
@@ -139,7 +145,7 @@ export function loadTwoGatesRoutingConfig(
     Boolean(env[key]?.trim()),
   );
 
-  if (!routingValuesPresent && environment !== 'production') {
+  if (!routingValuesPresent) {
     return { mode: 'disabled', environment };
   }
 
@@ -182,8 +188,16 @@ export function loadTwoGatesRoutingConfig(
     caCertPath,
     taskClass,
     anthropicOrigin,
-    connectTimeoutMs: parsePositiveInteger(env, 'TWOGATES_CONNECT_TIMEOUT_MS'),
-    requestTimeoutMs: parsePositiveInteger(env, 'TWOGATES_REQUEST_TIMEOUT_MS'),
+    connectTimeoutMs: parsePositiveInteger(
+      env,
+      'TWOGATES_CONNECT_TIMEOUT_MS',
+      MAX_TIMER_DELAY_MS,
+    ),
+    requestTimeoutMs: parsePositiveInteger(
+      env,
+      'TWOGATES_REQUEST_TIMEOUT_MS',
+      MAX_TIMER_DELAY_MS,
+    ),
     maxRequestBodyBytes: parsePositiveInteger(
       env,
       'TWOGATES_MAX_REQUEST_BODY_BYTES',

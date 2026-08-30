@@ -50,6 +50,7 @@ export function latestCorrelatedMessageId(
 
 const LOOPBACK_HOST = '127.0.0.1';
 const ROUTED_AUTH_MARKER = 'twogates-managed';
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
   'keep-alive',
@@ -76,9 +77,17 @@ function requireString(value: unknown, key: string): string {
   return value.trim();
 }
 
-function requirePositiveInteger(value: unknown, key: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
-    throw new Error(`${key} must be a safe positive integer`);
+function requirePositiveInteger(
+  value: unknown,
+  key: string,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) <= 0 ||
+    (value as number) > maximum
+  ) {
+    throw new Error(`${key} must be a safe positive integer no greater than ${maximum}`);
   }
   return value as number;
 }
@@ -148,10 +157,12 @@ export function loadProviderRoutingConfig(
     connectTimeoutMs: requirePositiveInteger(
       value.connectTimeoutMs,
       'connectTimeoutMs',
+      MAX_TIMER_DELAY_MS,
     ),
     requestTimeoutMs: requirePositiveInteger(
       value.requestTimeoutMs,
       'requestTimeoutMs',
+      MAX_TIMER_DELAY_MS,
     ),
     maxRequestBodyBytes: requirePositiveInteger(
       value.maxRequestBodyBytes,
@@ -435,6 +446,7 @@ export function buildRoutedSdkEnvironment(
   }
   environment.ANTHROPIC_BASE_URL = bridgeOrigin;
   environment.ANTHROPIC_API_KEY = ROUTED_AUTH_MARKER;
+  environment.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
   return environment;
 }
 

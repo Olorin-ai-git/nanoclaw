@@ -138,9 +138,7 @@ export function sourceTreeRequiresSync(
       }
     } else if (
       entry.isFile() &&
-      (!fs.existsSync(destinationPath) ||
-        !fs.statSync(destinationPath).isFile() ||
-        fs.statSync(sourcePath).mtimeMs > fs.statSync(destinationPath).mtimeMs)
+      (!fs.existsSync(destinationPath) || !fs.statSync(destinationPath).isFile())
     ) {
       return true;
     }
@@ -463,7 +461,11 @@ function buildVolumeMounts(
         groupAgentRunnerDir,
       );
       if (needsCopy) {
-        fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+        fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, {
+          recursive: true,
+          force: false,
+          errorOnExist: false,
+        });
       }
     }
     mounts.push({
