@@ -29,6 +29,10 @@ const runnerSourceRoot = path.join(
   'agent-runner',
   'src',
 );
+const executableScripts = [
+  path.join(projectRoot, 'scripts', 'claw'),
+  path.join(projectRoot, 'scripts', 'run-agent.ts'),
+];
 
 describe('TwoGates production source inventory', () => {
   it('keeps every typed routing key on the inactive environment surface without values', () => {
@@ -119,5 +123,18 @@ describe('TwoGates production source inventory', () => {
       'container/agent-runner/src/provider-routing.ts',
       'src/container-runner.ts',
     ]);
+  });
+
+  it('routes command-line agent execution through the trusted host runner', () => {
+    const clawSource = source(executableScripts[0]);
+    const agentScriptSource = source(executableScripts[1]);
+
+    expect(clawSource).toContain('scripts" / "run-agent.ts"');
+    expect(clawSource).not.toMatch(
+      /(?:CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY)/,
+    );
+    expect(clawSource).not.toMatch(/\b(?:docker|container)\s+["']?run\b/);
+    expect(agentScriptSource).toContain('runContainerAgent(group,');
+    expect(agentScriptSource).toContain('messageSourceId: `claw:${randomUUID()}`');
   });
 });
