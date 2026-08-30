@@ -135,6 +135,8 @@ describe('TwoGates production source inventory', () => {
     );
     expect(clawSource).not.toMatch(/\b(?:docker|container)\s+["']?run\b/);
     expect(agentScriptSource).toContain('runContainerAgent(group,');
-    expect(agentScriptSource).toContain('messageSourceId: `claw:${randomUUID()}`');
+    expect(agentScriptSource).toContain(
+      'messageSourceId: `claw:${randomUUID()}`',
+    );
   });
 });
