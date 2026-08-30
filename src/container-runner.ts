@@ -3,7 +3,9 @@
  * Spawns agent execution in containers and handles IPC
  */
 import { ChildProcess, spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -15,6 +17,7 @@ import {
   IDLE_TIMEOUT,
   ONECLI_URL,
   TIMEZONE,
+  TWOGATES_ROUTING,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
@@ -28,12 +31,19 @@ import { OneCLI } from '@onecli-sh/sdk';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
+import {
+  createEreborRunCorrelation,
+  EreborRunCorrelation,
+  TwoGatesRoutingConfig,
+} from './twogates-routing.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+const CONTAINER_ROUTING_CONFIG_PATH = '/run/nanoclaw/twogates/config.json';
+const CONTAINER_ROUTING_CA_PATH = '/run/nanoclaw/twogates/ca.pem';
 
 export interface ContainerInput {
   prompt: string;
@@ -44,6 +54,8 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  messageSourceId?: string;
+  routing?: EreborRunCorrelation;
 }
 
 export interface ContainerOutput {
@@ -59,9 +71,243 @@ interface VolumeMount {
   readonly: boolean;
 }
 
+interface PreparedTwoGatesRouting {
+  mounts: VolumeMount[];
+  correlation?: EreborRunCorrelation;
+  cleanup: () => void;
+  enabled: boolean;
+}
+
+interface RoutingFileOperations {
+  createDirectory: (directory: string) => void;
+  writeExclusiveFile: (filePath: string, contents: string) => void;
+  removeFile: (filePath: string) => void;
+}
+
+interface CredentialRoutingDependencies {
+  readProviderCredentials: () => Record<string, string>;
+  applyOneCli: (
+    args: string[],
+    agentIdentifier: string | undefined,
+  ) => Promise<boolean>;
+}
+
+const credentialRoutingDependencies: CredentialRoutingDependencies = {
+  readProviderCredentials: () =>
+    readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']),
+  applyOneCli: (args, agentIdentifier) =>
+    onecli.applyContainerConfig(args, {
+      addHostMapping: false,
+      agent: agentIdentifier,
+    }),
+};
+
+const routingFileOperations: RoutingFileOperations = {
+  createDirectory: (directory) => fs.mkdirSync(directory, { recursive: true }),
+  writeExclusiveFile: (filePath, contents) =>
+    fs.writeFileSync(filePath, contents, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    }),
+  removeFile: (filePath) => fs.rmSync(filePath, { force: true }),
+};
+const activeRoutingCleanups = new Set<() => void>();
+
+function routingRuntimeDirectory(): string {
+  return path.join(os.tmpdir(), 'nanoclaw-routing');
+}
+
+export function sourceTreeRequiresSync(
+  sourceDirectory: string,
+  destinationDirectory: string,
+): boolean {
+  if (!fs.existsSync(destinationDirectory)) return true;
+  for (const entry of fs.readdirSync(sourceDirectory, {
+    withFileTypes: true,
+  })) {
+    const sourcePath = path.join(sourceDirectory, entry.name);
+    const destinationPath = path.join(destinationDirectory, entry.name);
+    if (entry.isDirectory()) {
+      if (
+        !fs.existsSync(destinationPath) ||
+        !fs.statSync(destinationPath).isDirectory() ||
+        sourceTreeRequiresSync(sourcePath, destinationPath)
+      ) {
+        return true;
+      }
+    } else if (
+      entry.isFile() &&
+      (!fs.existsSync(destinationPath) ||
+        !fs.statSync(destinationPath).isFile())
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function cleanupActiveTwoGatesRoutingFiles(): void {
+  for (const cleanup of [...activeRoutingCleanups]) cleanup();
+}
+
+export function cleanupStaleTwoGatesRoutingFiles(
+  directory = routingRuntimeDirectory(),
+): void {
+  let removed = 0;
+  try {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (
+        entry.isFile() &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/i.test(
+          entry.name,
+        )
+      ) {
+        const routingFile = path.join(directory, entry.name);
+        try {
+          fs.rmSync(routingFile);
+          removed++;
+        } catch (err) {
+          logger.warn(
+            { err, routingFile },
+            'Failed to clean stale routing file',
+          );
+        }
+      }
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logger.warn({ err, directory }, 'Failed to clean stale routing files');
+    }
+  }
+  if (removed > 0) {
+    logger.info({ removed }, 'Cleaned stale TwoGates routing files');
+  }
+}
+
+export function prepareTwoGatesRouting(
+  config: TwoGatesRoutingConfig,
+  input: Pick<ContainerInput, 'groupFolder' | 'messageSourceId'>,
+  runId: string,
+  operations: RoutingFileOperations = routingFileOperations,
+): PreparedTwoGatesRouting {
+  if (config.mode === 'disabled') {
+    return { mounts: [], cleanup: () => undefined, enabled: false };
+  }
+  if (!input.messageSourceId) {
+    throw new Error(
+      'messageSourceId is required when TwoGates routing is enabled',
+    );
+  }
+
+  const correlation = createEreborRunCorrelation({
+    groupFolder: input.groupFolder,
+    messageSourceId: input.messageSourceId,
+    runId,
+  });
+  // Keep the credential file outside the project tree: main containers receive
+  // that tree as a read-only mount, so storing the file under DATA_DIR would
+  // expose the proxy token through a second mount path.
+  const routingDirectory = routingRuntimeDirectory();
+  const routingFile = path.join(routingDirectory, `${runId}.json`);
+  operations.createDirectory(routingDirectory);
+  operations.writeExclusiveFile(
+    routingFile,
+    `${JSON.stringify({
+      proxyUrl: config.proxyUrl,
+      proxyCredential: config.proxyCredential,
+      caCertPath: CONTAINER_ROUTING_CA_PATH,
+      taskClass: config.taskClass,
+      anthropicOrigin: config.anthropicOrigin,
+      connectTimeoutMs: config.connectTimeoutMs,
+      requestTimeoutMs: config.requestTimeoutMs,
+      maxRequestBodyBytes: config.maxRequestBodyBytes,
+      maxResponseBodyBytes: config.maxResponseBodyBytes,
+      maxHeaderBytes: config.maxHeaderBytes,
+      maxConcurrentRequests: config.maxConcurrentRequests,
+    })}\n`,
+  );
+
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    try {
+      operations.removeFile(routingFile);
+      cleaned = true;
+      activeRoutingCleanups.delete(cleanup);
+    } catch (err) {
+      logger.warn(
+        { err, routingFile },
+        'Failed to remove TwoGates routing file',
+      );
+    }
+  };
+  activeRoutingCleanups.add(cleanup);
+  return {
+    enabled: true,
+    correlation,
+    mounts: [
+      {
+        hostPath: routingFile,
+        containerPath: CONTAINER_ROUTING_CONFIG_PATH,
+        readonly: true,
+      },
+      {
+        hostPath: config.caCertPath,
+        containerPath: CONTAINER_ROUTING_CA_PATH,
+        readonly: true,
+      },
+    ],
+    cleanup,
+  };
+}
+
+export async function appendContainerCredentialRouting(
+  args: string[],
+  routingEnabled: boolean,
+  containerName: string,
+  agentIdentifier: string | undefined,
+  dependencies: CredentialRoutingDependencies = credentialRoutingDependencies,
+): Promise<void> {
+  if (routingEnabled) {
+    args.push(
+      '-e',
+      `NANOCLAW_TWOGATES_CONFIG_PATH=${CONTAINER_ROUTING_CONFIG_PATH}`,
+    );
+    logger.info({ containerName }, 'TwoGates provider routing configured');
+    return;
+  }
+
+  // Local/development compatibility: subscription OAuth can still be passed
+  // directly, or OneCLI can inject an API key at its gateway. Production
+  // never reaches this branch because its config requires TwoGates routing.
+  const envVars = dependencies.readProviderCredentials();
+  if (envVars.CLAUDE_CODE_OAUTH_TOKEN) {
+    args.push(
+      '-e',
+      `CLAUDE_CODE_OAUTH_TOKEN=${envVars.CLAUDE_CODE_OAUTH_TOKEN}`,
+    );
+    logger.info({ containerName }, 'Injected OAuth token directly');
+  } else if (envVars.ANTHROPIC_API_KEY) {
+    const onecliApplied = await dependencies.applyOneCli(args, agentIdentifier);
+    if (onecliApplied) {
+      logger.info({ containerName }, 'OneCLI gateway config applied');
+    } else {
+      logger.warn(
+        { containerName },
+        'OneCLI gateway not reachable — container will have no credentials',
+      );
+    }
+  } else {
+    logger.warn({ containerName }, 'No credentials found in .env');
+  }
+}
+
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
+  routingEnabled: boolean,
+  runIpcInputDir: string,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
@@ -196,39 +442,53 @@ function buildVolumeMounts(
     containerPath: '/workspace/ipc',
     readonly: false,
   });
+  fs.mkdirSync(runIpcInputDir, { recursive: true });
+  mounts.push({
+    hostPath: runIpcInputDir,
+    containerPath: '/workspace/ipc/input',
+    readonly: false,
+  });
 
-  // Copy agent-runner source into a per-group writable location so agents
-  // can customize it (add tools, change behavior) without affecting other
-  // groups. Recompiled on container startup via entrypoint.sh.
+  // Routed runs execute the trusted bridge source read-only. Local/development
+  // runs retain NanoClaw's per-group customization behavior.
   const agentRunnerSrc = path.join(
     projectRoot,
     'container',
     'agent-runner',
     'src',
   );
-  const groupAgentRunnerDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    'agent-runner-src',
-  );
-  if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
-    if (needsCopy) {
-      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  if (routingEnabled) {
+    mounts.push({
+      hostPath: agentRunnerSrc,
+      containerPath: '/app/src',
+      readonly: true,
+    });
+  } else {
+    const groupAgentRunnerDir = path.join(
+      DATA_DIR,
+      'sessions',
+      group.folder,
+      'agent-runner-src',
+    );
+    if (fs.existsSync(agentRunnerSrc)) {
+      const needsCopy = sourceTreeRequiresSync(
+        agentRunnerSrc,
+        groupAgentRunnerDir,
+      );
+      if (needsCopy) {
+        fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, {
+          recursive: true,
+          force: false,
+          errorOnExist: false,
+        });
+      }
     }
+    mounts.push({
+      hostPath: groupAgentRunnerDir,
+      containerPath: '/app/src',
+      readonly: false,
+    });
   }
-  mounts.push({
-    hostPath: groupAgentRunnerDir,
-    containerPath: '/app/src',
-    readonly: false,
-  });
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
@@ -247,38 +507,19 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
+  routingEnabled = false,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Pass OAuth token directly if available — subscription tokens need
-  // Authorization: Bearer, which OneCLI's API key injection doesn't handle.
-  const envVars = readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']);
-  if (envVars.CLAUDE_CODE_OAUTH_TOKEN) {
-    args.push(
-      '-e',
-      `CLAUDE_CODE_OAUTH_TOKEN=${envVars.CLAUDE_CODE_OAUTH_TOKEN}`,
-    );
-    logger.info({ containerName }, 'Injected OAuth token directly');
-  } else if (envVars.ANTHROPIC_API_KEY) {
-    // Fall back to OneCLI gateway for API key injection
-    const onecliApplied = await onecli.applyContainerConfig(args, {
-      addHostMapping: false, // Nanoclaw already handles host gateway
-      agent: agentIdentifier,
-    });
-    if (onecliApplied) {
-      logger.info({ containerName }, 'OneCLI gateway config applied');
-    } else {
-      logger.warn(
-        { containerName },
-        'OneCLI gateway not reachable — container will have no credentials',
-      );
-    }
-  } else {
-    logger.warn({ containerName }, 'No credentials found in .env');
-  }
+  await appendContainerCredentialRouting(
+    args,
+    routingEnabled,
+    containerName,
+    agentIdentifier,
+  );
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
@@ -309,7 +550,11 @@ async function buildContainerArgs(
 export async function runContainerAgent(
   group: RegisteredGroup,
   input: ContainerInput,
-  onProcess: (proc: ChildProcess, containerName: string) => void,
+  onProcess: (
+    proc: ChildProcess,
+    containerName: string,
+    ipcInputDir: string,
+  ) => void,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
@@ -317,18 +562,47 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const runIpcDir = resolveGroupIpcPath(`run-${randomUUID()}`);
+  const runIpcInputDir = path.join(runIpcDir, 'input');
+  const cleanupRunIpc = () => {
+    fs.rmSync(runIpcDir, { recursive: true, force: true });
+  };
+
+  const mounts = buildVolumeMounts(
+    group,
+    input.isMain,
+    TWOGATES_ROUTING.mode === 'enabled',
+    runIpcInputDir,
+  );
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
+  const routingRun = prepareTwoGatesRouting(
+    TWOGATES_ROUTING,
+    input,
+    randomUUID(),
+  );
+  mounts.push(...routingRun.mounts);
+  const { messageSourceId: _messageSourceId, ...containerVisibleInput } = input;
+  const effectiveInput: ContainerInput = routingRun.correlation
+    ? { ...containerVisibleInput, routing: routingRun.correlation }
+    : containerVisibleInput;
   // Main group uses the default OneCLI agent; others use their own agent.
   const agentIdentifier = input.isMain
     ? undefined
     : group.folder.toLowerCase().replace(/_/g, '-');
-  const containerArgs = await buildContainerArgs(
-    mounts,
-    containerName,
-    agentIdentifier,
-  );
+  let containerArgs: string[];
+  try {
+    containerArgs = await buildContainerArgs(
+      mounts,
+      containerName,
+      agentIdentifier,
+      routingRun.enabled,
+    );
+  } catch (err) {
+    routingRun.cleanup();
+    cleanupRunIpc();
+    throw err;
+  }
 
   logger.debug(
     {
@@ -338,7 +612,6 @@ export async function runContainerAgent(
         (m) =>
           `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
       ),
-      containerArgs: containerArgs.join(' '),
     },
     'Container mount configuration',
   );
@@ -354,29 +627,55 @@ export async function runContainerAgent(
   );
 
   const logsDir = path.join(groupDir, 'logs');
-  fs.mkdirSync(logsDir, { recursive: true });
+  try {
+    fs.mkdirSync(logsDir, { recursive: true });
+  } catch (err) {
+    routingRun.cleanup();
+    cleanupRunIpc();
+    throw err;
+  }
 
-  return new Promise((resolve) => {
-    const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+  return new Promise((resolve, reject) => {
+    let container: ChildProcess | undefined;
+    try {
+      container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
 
-    onProcess(container, containerName);
+      onProcess(container, containerName, runIpcInputDir);
+      container.stdin?.once('error', (err) => {
+        routingRun.cleanup();
+        cleanupRunIpc();
+        container?.kill('SIGKILL');
+        reject(err);
+      });
+      container.stdin?.write(JSON.stringify(effectiveInput));
+      container.stdin?.end();
+    } catch (err) {
+      routingRun.cleanup();
+      cleanupRunIpc();
+      container?.kill('SIGKILL');
+      reject(err);
+      return;
+    }
+    if (!container) {
+      routingRun.cleanup();
+      cleanupRunIpc();
+      reject(new Error('Container runtime did not return a child process'));
+      return;
+    }
 
     let stdout = '';
     let stderr = '';
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    container.stdin.write(JSON.stringify(input));
-    container.stdin.end();
-
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
     let parseBuffer = '';
     let newSessionId: string | undefined;
     let outputChain = Promise.resolve();
 
-    container.stdout.on('data', (data) => {
+    container.stdout!.on('data', (data) => {
       const chunk = data.toString();
 
       // Always accumulate for logging
@@ -428,7 +727,7 @@ export async function runContainerAgent(
       }
     });
 
-    container.stderr.on('data', (data) => {
+    container.stderr!.on('data', (data) => {
       const chunk = data.toString();
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
@@ -484,6 +783,8 @@ export async function runContainerAgent(
 
     container.on('close', (code) => {
       clearTimeout(timeout);
+      routingRun.cleanup();
+      cleanupRunIpc();
       const duration = Date.now() - startTime;
 
       if (timedOut) {
@@ -516,7 +817,7 @@ export async function runContainerAgent(
               result: null,
               newSessionId,
             });
-          });
+          }, reject);
           return;
         }
 
@@ -567,9 +868,6 @@ export async function runContainerAgent(
           );
         }
         logLines.push(
-          `=== Container Args ===`,
-          containerArgs.join(' '),
-          ``,
           `=== Mounts ===`,
           mounts
             .map(
@@ -634,7 +932,7 @@ export async function runContainerAgent(
             result: null,
             newSessionId,
           });
-        });
+        }, reject);
         return;
       }
 
@@ -689,6 +987,7 @@ export async function runContainerAgent(
 
     container.on('error', (err) => {
       clearTimeout(timeout);
+      routingRun.cleanup();
       logger.error(
         { group: group.name, containerName, error: err },
         'Container spawn error',

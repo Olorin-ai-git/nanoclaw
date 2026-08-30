@@ -1,0 +1,11 @@
+{
+  "context_files": [
+    "CLAUDE.md"
+  ],
+  "installed_at": "2026-08-10",
+  "project": "nanoclaw",
+  "review": {
+    "model": null
+  },
+  "schema": 1
+}

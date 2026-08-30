@@ -1,0 +1,10 @@
+
+
+Run every step below at the end of every goal (PROCESS.md step 9).
+
+1. Re-read the run journal end to end: challenges, wrong turns, reviewer/auditor/judge findings, anything that surprised you.
+2. Write learnings into LEARNINGS.md using its entry format: categorized, detection method recorded, phrased as an executable instruction, tagged `durable` or `project`. A reviewer or judge finding you dismissed or disputed is also a learning: record it with the rule or decision it conflicted with. Prune entries this run proved wrong or stale — durable ones included; a disproof is an improvement, and the symmetric sync carries deletions upstream like additions.
+3. Where a learning changes the process itself: put durable process improvements in the PROCESS.md core section (they propagate on promote); put project-specific ones in its project-extensions section.
+4. **Recursive step** — when this reflection revealed a better way to reflect, update this file: the core section for durable improvements, the extensions section for project-specific ones. When it did not, say so explicitly in the journal; do not fabricate an edit.
+5. Close the loop: re-read every file you changed; fix anything that does not read as an instruction you would follow.
+6. Run `.harness/bin/harness promote` when the canonical home is reachable — it commits in the canonical repo; report the printed branch and commit in the journal. When it is unreachable, record in the journal that the promotion still needs to run. Clear STATE.md back to `No active goal.`

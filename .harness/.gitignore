@@ -1,0 +1,7 @@
+# Harness-generated transients — rules maintained additively by harness init/update.
+/dashboard.html
+/vendorstage/
+/mergework/
+__pycache__/
+*.pyc
+*.harness-new

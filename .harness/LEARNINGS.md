@@ -1,0 +1,178 @@
+# Learnings
+
+Read both sections before any goal; write new entries during self-improvement (SELF-IMPROVE.md step 2). Entry format:
+
+```
+### HL-<id> — <imperative instruction as title>
+- category: process | architecture | verification | tooling
+- scope: durable | project
+- detected-by: <how this was discovered — failure, review finding, judge round>
+- instruction: <what to do differently, written so it can be followed without this run's context>
+```
+
+`HL-<id>` is the first 8 hex characters of the sha256 of the title, so merges deduplicate by content. Durable entries belong in the durable section below and propagate to every install on promote; project entries stay in the project section and never leave this repo. Free-text notes belong above the first entry of a section — everything from an entry's heading to the next heading travels (and is pruned) with that entry.
+
+## Durable
+
+<!-- harness:durable:begin -->
+
+### HL-b1ddf771 — Categorize every learning
+
+- category: process
+- scope: durable
+- detected-by: seed — the source video's own self-improvement run
+- instruction: Give every entry exactly one category — process, architecture, verification, or tooling — so the playbook stays scannable by concern.
+
+### HL-6055c198 — Record how each learning was detected
+
+- category: process
+- scope: durable
+- detected-by: seed — the source video's own self-improvement run
+- instruction: Fill the detected-by line with the concrete signal — a failure, a review finding, a judge round — so a future reader can weigh the evidence behind the instruction.
+
+### HL-63e21440 — Write learnings as executable instructions
+
+- category: process
+- scope: durable
+- detected-by: seed — the source video's own self-improvement run
+- instruction: Phrase every entry as an instruction an agent can follow without this run's context; delete narration that only describes what happened.
+
+### HL-2558dd01 — Prune learnings that are wrong or stale
+
+- category: process
+- scope: durable
+- detected-by: seed — the source video's own self-improvement run
+- instruction: Delete entries the current run disproved or made obsolete — durable ones included; the symmetric sync carries deletions upstream exactly like additions.
+
+### HL-70456362 — Separate durable learnings from project-local ones
+
+- category: process
+- scope: durable
+- detected-by: seed — the source video's own self-improvement run
+- instruction: Tag each entry durable or project as you write it; put durable entries in the durable section so they propagate, and keep project entries in the project section.
+
+### HL-bb65a75f — Close the loop by re-reading what you wrote
+
+- category: process
+- scope: durable
+- detected-by: seed — the source video's own self-improvement run
+- instruction: After writing or editing playbook and process files, re-read them end to end and fix anything you would not actually follow as written.
+
+### HL-b3f40e61 — Reproduce failures with real user events before declaring the product broken
+
+- category: verification
+- scope: durable
+- detected-by: seed — verification learning from the source video's run
+- instruction: Before concluding the product is broken, drive it with real user events and reproduce the failure; a red unit-level check alone is not proof the product fails in use.
+
+### HL-18c02fd3 — Bind every verification artifact to the commit it ran at
+
+- category: verification
+- scope: durable
+- detected-by: judge rounds 2 and 5 of the harness build went red on evidence that trailed HEAD; a near-miss where a SHA was stamped onto logs from an older run was caught and re-run for real
+- instruction: Every evidence log starts with the command and the repo HEAD it ran against, captured in the same run; when the tree changes, re-run the drill — never restamp an old log.
+
+### HL-62ee1105 — Advance the run state files at every step transition
+
+- category: process
+- scope: durable
+- detected-by: two judge rounds flagged STATE.md and the journal describing steps already finished
+- instruction: Update STATE.md and the journal's state section the moment a PROCESS step starts or ends, not at reporting time; a reader mid-flight must see the true step.
+
+### HL-975aae0e — Make evidence logs carry commands and inspectable artifacts
+
+- category: verification
+- scope: durable
+- detected-by: a judge round rejected a drill log holding only summary assertions over deleted throwaway repos
+- instruction: Run drills with command tracing on, print the contents being asserted about, and keep the throwaway repos in the evidence directory so a verifier can reopen them.
+
+### HL-5111771f — Record a disputed gate finding as a decision with evidence
+
+- category: process
+- scope: durable
+- detected-by: the harness build's gate loop stalled on a finding that conflicted with the operating rules' allowance for algorithmic literals
+- instruction: When a reviewer or judge finding conflicts with a documented rule or decision, write the dispute into the run journal with the rule it conflicts with, and move on — a recorded dispute is a terminal state, silent re-looping is not.
+
+### HL-57aaebc0 — Prove ownership before deleting, never infer it from a name
+
+- category: architecture
+- scope: durable
+- detected-by: a cleanup step deleted every `.html` in its output directory that the current run
+  had not produced, including an operator's own hand-written page — the output directory was also
+  a publish directory, and a name-list cannot tell whose file is whose
+- instruction: Before a tool deletes anything it did not create in the same run, make it prove
+  the file is its own — a marker it writes into the content, or a manifest it keeps — and treat
+  unreadable or unmarked as NOT ours. Bounding deletion by directory, extension or a list of
+  expected names only describes where your files usually are; it says nothing about who wrote the
+  file you are about to remove, and the cost of being wrong is somebody else's work.
+
+### HL-3853922a — Ask the filesystem for identity instead of comparing path strings
+
+- category: architecture
+- scope: durable
+- detected-by: `Path.resolve()` follows symlinks but does not canonicalise case, so on a
+  case-insensitive filesystem two spellings of one directory produced two dedupe keys and doubled
+  a 26-project inventory to 52 rows; separately, writing `alpha.html` over an existing
+  `Alpha.html` keeps the OLD directory entry, so an exact-name check deleted the file it had just
+  written
+- instruction: When deduplicating paths or asking "is this the same file", use `stat()`'s
+  `(st_dev, st_ino)` rather than a resolved path string, and compare filenames
+  case-insensitively wherever the filesystem is. A resolved path is a normalised string, not an
+  identity, and on macOS and Windows the difference is routine rather than exotic.
+
+### HL-717d6d34 — Compare like for like when diffing against version control
+
+- category: verification
+- scope: durable
+- detected-by: an evidence check compared `git show HEAD:<path>` against the working file's bytes
+  and reported 41 untouched files as changed — git stores a symlink as a blob holding its TARGET
+  PATH, so a PNG was being compared against the string `../shared/assets/...`
+- instruction: When comparing working-tree content against a git blob, handle symlinks, submodules
+  and filtered content explicitly — read the link target for a link, skip gitlinks, and remember
+  that smudge filters mean a blob need not equal the file. A verification that manufactures
+  findings destroys trust exactly as fast as one that hides them, and costs a real investigation
+  each time.
+
+### HL-6ec5ace7 — Keep probing past the first error until the cause stops changing
+
+- category: verification
+- scope: durable
+- detected-by: a proxy probe failed with `unable to get local issuer certificate` and read as a
+  TLS misconfiguration; trusting the CA for both hops turned it into `502
+  twogates_no_credential`, which was the actual blocker and had a completely different remedy
+- instruction: Treat the first error a layered system returns as the outermost symptom, not the
+  cause. Remove it and probe again, and keep going until the message stops changing — a stack of
+  proxies, tunnels and TLS terminations reports the failure nearest the client, which is rarely
+  the one you have to fix.
+
+### HL-22e1db74 — Verify a claim about the environment at the moment you write it down
+
+- category: process
+- scope: durable
+- detected-by: a skill was written asserting "there is no firebase CLI on this machine"; the check
+  behind it was true hours earlier and false by the time it was written, and the skill would have
+  sent the next agent down a hand-rolled REST path for no reason
+- instruction: Re-run the check for any environmental fact at the moment you commit it to a
+  durable document, and write what you ran beside it. Facts about a machine — what is installed,
+  what is authenticated, what a URL returns — expire between learning them and recording them,
+  and a stale one in a skill is followed rather than questioned.
+
+### HL-358a2018 — Report a partial rollout as partial, per repo, with the blocker named
+
+- category: process
+- scope: durable
+- detected-by: 26 repos were reported green on the half of onboarding that had been done, while
+  the second half had no evidence at all; a review found the count presented as a clean result
+- instruction: When a rollout has more than one required half, report per target which halves
+  hold, and count a target as done only when all of them do. Name the blocker for each missing
+  half concretely enough to act on. A summary that counts the finished half is read as a finished
+  rollout, and the gap is discovered by whoever depends on it.
+<!-- harness:durable:end -->
+
+## Project
+
+<!-- harness:project:begin -->
+
+(Project-local learnings live here; an entry whose id also appears in the durable section is removed from here by the next sync that touches the durable section.)
+
+<!-- harness:project:end -->

@@ -4,6 +4,7 @@ import path from 'path';
 
 import { DATA_DIR, MAX_CONCURRENT_CONTAINERS } from './config.js';
 import { logger } from './logger.js';
+import { createEreborMessageCorrelation } from './twogates-routing.js';
 
 interface QueuedTask {
   id: string;
@@ -23,7 +24,7 @@ interface GroupState {
   pendingTasks: QueuedTask[];
   process: ChildProcess | null;
   containerName: string | null;
-  groupFolder: string | null;
+  ipcInputDir: string | null;
   retryCount: number;
 }
 
@@ -34,6 +35,22 @@ export class GroupQueue {
   private processMessagesFn: ((groupJid: string) => Promise<boolean>) | null =
     null;
   private shuttingDown = false;
+  private lastIpcTimestamp = 0;
+  private ipcSequence = 0;
+
+  private nextIpcFilename(inputDir: string): string {
+    for (;;) {
+      const timestamp = Math.max(Date.now(), this.lastIpcTimestamp);
+      if (timestamp === this.lastIpcTimestamp) {
+        this.ipcSequence += 1;
+      } else {
+        this.lastIpcTimestamp = timestamp;
+        this.ipcSequence = 0;
+      }
+      const filename = `${timestamp.toString().padStart(13, '0')}-${this.ipcSequence.toString().padStart(12, '0')}.json`;
+      if (!fs.existsSync(path.join(inputDir, filename))) return filename;
+    }
+  }
 
   private getGroup(groupJid: string): GroupState {
     let state = this.groups.get(groupJid);
@@ -47,7 +64,7 @@ export class GroupQueue {
         pendingTasks: [],
         process: null,
         containerName: null,
-        groupFolder: null,
+        ipcInputDir: null,
         retryCount: 0,
       };
       this.groups.set(groupJid, state);
@@ -133,12 +150,12 @@ export class GroupQueue {
     groupJid: string,
     proc: ChildProcess,
     containerName: string,
-    groupFolder?: string,
+    ipcInputDir?: string,
   ): void {
     const state = this.getGroup(groupJid);
     state.process = proc;
     state.containerName = containerName;
-    if (groupFolder) state.groupFolder = groupFolder;
+    if (ipcInputDir) state.ipcInputDir = ipcInputDir;
   }
 
   /**
@@ -157,19 +174,32 @@ export class GroupQueue {
    * Send a follow-up message to the active container via IPC file.
    * Returns true if the message was written, false if no active container.
    */
-  sendMessage(groupJid: string, text: string): boolean {
+  sendMessage(
+    groupJid: string,
+    text: string,
+    messageSourceId?: string,
+  ): boolean {
     const state = this.getGroup(groupJid);
-    if (!state.active || !state.groupFolder || state.isTaskContainer)
+    if (!state.active || !state.ipcInputDir || state.isTaskContainer)
       return false;
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
 
-    const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
+    const inputDir = state.ipcInputDir;
     try {
       fs.mkdirSync(inputDir, { recursive: true });
-      const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
+      const filename = this.nextIpcFilename(inputDir);
       const filepath = path.join(inputDir, filename);
       const tempPath = `${filepath}.tmp`;
-      fs.writeFileSync(tempPath, JSON.stringify({ type: 'message', text }));
+      fs.writeFileSync(
+        tempPath,
+        JSON.stringify({
+          type: 'message',
+          text,
+          messageId: messageSourceId
+            ? createEreborMessageCorrelation(messageSourceId)
+            : undefined,
+        }),
+      );
       fs.renameSync(tempPath, filepath);
       return true;
     } catch {
@@ -182,9 +212,9 @@ export class GroupQueue {
    */
   closeStdin(groupJid: string): void {
     const state = this.getGroup(groupJid);
-    if (!state.active || !state.groupFolder) return;
+    if (!state.active || !state.ipcInputDir) return;
 
-    const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
+    const inputDir = state.ipcInputDir;
     try {
       fs.mkdirSync(inputDir, { recursive: true });
       fs.writeFileSync(path.join(inputDir, '_close'), '');
@@ -225,7 +255,7 @@ export class GroupQueue {
       state.active = false;
       state.process = null;
       state.containerName = null;
-      state.groupFolder = null;
+      state.ipcInputDir = null;
       this.activeCount--;
       this.drainGroup(groupJid);
     }
@@ -254,7 +284,7 @@ export class GroupQueue {
       state.runningTaskId = null;
       state.process = null;
       state.containerName = null;
-      state.groupFolder = null;
+      state.ipcInputDir = null;
       this.activeCount--;
       this.drainGroup(groupJid);
     }

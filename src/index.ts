@@ -22,6 +22,8 @@ import {
 } from './channels/registry.js';
 import {
   ContainerOutput,
+  cleanupActiveTwoGatesRoutingFiles,
+  cleanupStaleTwoGatesRoutingFiles,
   runContainerAgent,
   writeGroupsSnapshot,
   writeTasksSnapshot,
@@ -36,7 +38,8 @@ import {
   getAllSessions,
   deleteSession,
   getAllTasks,
-  getLastBotMessageTimestamp,
+  getLastBotMessageCursor,
+  messageCursor,
   getMessagesSince,
   getNewMessages,
   getRouterState,
@@ -186,15 +189,12 @@ function getOrRecoverCursor(chatJid: string): string {
   const existing = lastAgentTimestamp[chatJid];
   if (existing) return existing;
 
-  const botTs = getLastBotMessageTimestamp(chatJid, ASSISTANT_NAME);
-  if (botTs) {
-    logger.info(
-      { chatJid, recoveredFrom: botTs },
-      'Recovered message cursor from last bot reply',
-    );
-    lastAgentTimestamp[chatJid] = botTs;
+  const botCursor = getLastBotMessageCursor(chatJid, ASSISTANT_NAME);
+  if (botCursor) {
+    logger.info({ chatJid }, 'Recovered message cursor from last bot reply');
+    lastAgentTimestamp[chatJid] = botCursor;
     saveState();
-    return botTs;
+    return botCursor;
   }
   return '';
 }
@@ -321,8 +321,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
   const previousCursor = lastAgentTimestamp[chatJid] || '';
-  lastAgentTimestamp[chatJid] =
-    missedMessages[missedMessages.length - 1].timestamp;
+  lastAgentTimestamp[chatJid] = messageCursor(
+    missedMessages[missedMessages.length - 1],
+  );
   saveState();
 
   logger.info(
@@ -348,33 +349,39 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    missedMessages[missedMessages.length - 1].id,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
+        clearIpcResponseWatchdog(chatJid);
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-      clearIpcResponseWatchdog(chatJid);
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -407,6 +414,7 @@ async function runAgent(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
+  messageSourceId: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
@@ -457,11 +465,12 @@ async function runAgent(
         sessionId,
         groupFolder: group.folder,
         chatJid,
+        messageSourceId,
         isMain,
         assistantName: ASSISTANT_NAME,
       },
-      (proc, containerName) =>
-        queue.registerProcess(chatJid, proc, containerName, group.folder),
+      (proc, containerName, ipcInputDir) =>
+        queue.registerProcess(chatJid, proc, containerName, ipcInputDir),
       wrappedOnOutput,
     );
 
@@ -582,14 +591,21 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          if (
+            queue.sendMessage(
+              chatJid,
+              formatted,
+              messagesToSend[messagesToSend.length - 1].id,
+            )
+          ) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
             );
             startIpcResponseWatchdog(chatJid);
-            lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
+            lastAgentTimestamp[chatJid] = messageCursor(
+              messagesToSend[messagesToSend.length - 1],
+            );
             saveState();
             // Show typing indicator while the container processes the piped message
             channel
@@ -633,6 +649,7 @@ function recoverPendingMessages(): void {
 }
 
 function ensureContainerSystemRunning(): void {
+  cleanupStaleTwoGatesRoutingFiles();
   ensureContainerRuntimeRunning();
   cleanupOrphans();
 }
@@ -655,6 +672,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     await queue.shutdown(10000);
+    cleanupActiveTwoGatesRoutingFiles();
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
   };
@@ -776,8 +794,8 @@ async function main(): Promise<void> {
     registeredGroups: () => registeredGroups,
     getSessions: () => sessions,
     queue,
-    onProcess: (groupJid, proc, containerName, groupFolder) =>
-      queue.registerProcess(groupJid, proc, containerName, groupFolder),
+    onProcess: (groupJid, proc, containerName, ipcInputDir) =>
+      queue.registerProcess(groupJid, proc, containerName, ipcInputDir),
     sendMessage: async (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) {
