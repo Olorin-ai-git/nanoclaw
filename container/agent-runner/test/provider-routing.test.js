@@ -155,6 +155,14 @@ function requestConnect(origin) {
   });
 }
 
+async function waitUntil(predicate, message) {
+  const deadline = Date.now() + 1500;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test('provider routing file rejects malformed secrets and unsafe paths', (t) => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), 'nanoclaw-routing-config-test-'),
@@ -251,6 +259,7 @@ test('provider bridge uses dual TLS, Bearer CONNECT auth, and exact correlation 
     connectCount: 0,
     responseMode: 'normal',
     slowResponseStarted: false,
+    slowUpstreamClosed: false,
   };
 
   const proxyServer = tls.createServer(
@@ -312,7 +321,10 @@ test('provider bridge uses dual TLS, Bearer CONNECT auth, and exact correlation 
               ].join('\r\n'),
             );
             const interval = setInterval(() => innerSocket.write('.'), 20);
-            innerSocket.once('close', () => clearInterval(interval));
+            innerSocket.once('close', () => {
+              clearInterval(interval);
+              observed.slowUpstreamClosed = true;
+            });
             return;
           }
           innerSocket.end(
@@ -470,6 +482,29 @@ test('provider bridge uses dual TLS, Bearer CONNECT auth, and exact correlation 
     await bridge.close();
     bridge = undefined;
     observed.responseMode = 'slow';
+    observed.slowResponseStarted = false;
+    observed.slowUpstreamClosed = false;
+    bridge = await startProviderBridge(routingConfig, correlation, dependencies);
+    const abandonedRequest = http.request(new URL('/v1/messages', bridge.origin), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    });
+    abandonedRequest.on('error', () => {});
+    abandonedRequest.end('{"model":"claude-test","messages":[]}');
+    await waitUntil(
+      () => observed.slowResponseStarted,
+      'provider did not receive the request before caller cancellation',
+    );
+    abandonedRequest.destroy();
+    await waitUntil(
+      () => observed.slowUpstreamClosed,
+      'caller cancellation did not close the upstream provider request',
+    );
+
+    await bridge.close();
+    bridge = undefined;
+    observed.slowResponseStarted = false;
+    observed.slowUpstreamClosed = false;
     bridge = await startProviderBridge(
       { ...routingConfig, requestTimeoutMs: 500 },
       correlation,
@@ -494,7 +529,7 @@ test('provider bridge uses dual TLS, Bearer CONNECT auth, and exact correlation 
       `expected fail-closed timeout, received ${JSON.stringify(slowOutcome)}`,
     );
     assert.ok(Date.now() - requestStartedAt < 1500);
-    assert.equal(observed.connectCount, 3);
+    assert.equal(observed.connectCount, 4);
   } finally {
     await bridge?.close();
     if (proxyServer.listening) await close(proxyServer);

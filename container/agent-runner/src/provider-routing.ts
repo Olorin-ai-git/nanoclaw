@@ -519,6 +519,11 @@ export async function startProviderBridge(
           throw new Error('Provider request identifier must be a UUID');
         }
         const requestAbortController = new AbortController();
+        const abortForDisconnectedCaller = () => {
+          if (!response.writableEnded) requestAbortController.abort();
+        };
+        request.once('aborted', abortForDisconnectedCaller);
+        response.once('close', abortForDisconnectedCaller);
         const requestDeadline = setTimeout(
           () => requestAbortController.abort(),
           config.requestTimeoutMs,
@@ -596,6 +601,8 @@ export async function startProviderBridge(
           });
         } finally {
           clearTimeout(requestDeadline);
+          request.off('aborted', abortForDisconnectedCaller);
+          response.off('close', abortForDisconnectedCaller);
           tunnel?.destroy();
         }
       };
