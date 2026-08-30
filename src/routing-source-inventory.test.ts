@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import ts from 'typescript';
 
 import { describe, expect, it } from 'vitest';
 
@@ -21,8 +22,56 @@ function source(filePath: string): string {
   return fs.readFileSync(filePath, 'utf8');
 }
 
+interface ContainerAgentInvocation {
+  filePath: string;
+  line: number;
+  hasMessageSourceId: boolean;
+}
+
+function containerAgentInvocations(filePath: string): ContainerAgentInvocation[] {
+  const contents = source(filePath);
+  const syntax = ts.createSourceFile(
+    filePath,
+    contents,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const calls: ContainerAgentInvocation[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'runContainerAgent'
+    ) {
+      const input = node.arguments[1];
+      const hasMessageSourceId =
+        input !== undefined &&
+        ts.isObjectLiteralExpression(input) &&
+        input.properties.some(
+          (property) =>
+            (ts.isShorthandPropertyAssignment(property) &&
+              property.name.text === 'messageSourceId') ||
+            (ts.isPropertyAssignment(property) &&
+              ((ts.isIdentifier(property.name) && property.name.text === 'messageSourceId') ||
+                (ts.isStringLiteral(property.name) &&
+                  property.name.text === 'messageSourceId'))),
+        );
+      calls.push({
+        filePath,
+        line: syntax.getLineAndCharacterOfPosition(node.getStart(syntax)).line + 1,
+        hasMessageSourceId,
+      });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(syntax);
+  return calls;
+}
+
 const projectRoot = process.cwd();
 const hostSourceRoot = path.join(projectRoot, 'src');
+const scriptSourceRoot = path.join(projectRoot, 'scripts');
 const runnerSourceRoot = path.join(
   projectRoot,
   'container',
@@ -45,25 +94,22 @@ describe('TwoGates production source inventory', () => {
   });
 
   it('keeps every container launch correlated to a source message', () => {
-    const invocationFiles = productionTypeScriptFiles(hostSourceRoot)
-      .filter((filePath) =>
-        source(filePath)
-          .split('\n')
-          .some(
-            (line) =>
-              line.includes('runContainerAgent(') &&
-              !line.includes('function runContainerAgent('),
-          ),
-      )
-      .map((filePath) => path.relative(projectRoot, filePath))
-      .sort();
+    const invocations = [
+      ...productionTypeScriptFiles(hostSourceRoot),
+      ...productionTypeScriptFiles(scriptSourceRoot),
+    ].flatMap(containerAgentInvocations);
 
-    expect(invocationFiles).toEqual(['src/index.ts', 'src/task-scheduler.ts']);
-    for (const relativePath of invocationFiles) {
-      expect(source(path.join(projectRoot, relativePath))).toMatch(
-        /runContainerAgent\([\s\S]*?messageSourceId(?:,|:)/,
-      );
-    }
+    expect(
+      invocations
+        .map((call) => path.relative(projectRoot, call.filePath))
+        .sort(),
+    ).toEqual(['scripts/run-agent.ts', 'src/index.ts', 'src/task-scheduler.ts']);
+    expect(
+      invocations.filter((call) => !call.hasMessageSourceId).map((call) => ({
+        file: path.relative(projectRoot, call.filePath),
+        line: call.line,
+      })),
+    ).toEqual([]);
 
     expect(source(path.join(hostSourceRoot, 'index.ts'))).toMatch(
       /queue\.sendMessage\([\s\S]*?messagesToSend\[messagesToSend\.length - 1\]\.id/,
