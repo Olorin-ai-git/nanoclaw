@@ -307,6 +307,7 @@ function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
   routingEnabled: boolean,
+  runIpcInputDir: string,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
@@ -441,6 +442,12 @@ function buildVolumeMounts(
     containerPath: '/workspace/ipc',
     readonly: false,
   });
+  fs.mkdirSync(runIpcInputDir, { recursive: true });
+  mounts.push({
+    hostPath: runIpcInputDir,
+    containerPath: '/workspace/ipc/input',
+    readonly: false,
+  });
 
   // Routed runs execute the trusted bridge source read-only. Local/development
   // runs retain NanoClaw's per-group customization behavior.
@@ -543,7 +550,11 @@ async function buildContainerArgs(
 export async function runContainerAgent(
   group: RegisteredGroup,
   input: ContainerInput,
-  onProcess: (proc: ChildProcess, containerName: string) => void,
+  onProcess: (
+    proc: ChildProcess,
+    containerName: string,
+    ipcInputDir: string,
+  ) => void,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
@@ -551,10 +562,17 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
+  const runIpcDir = resolveGroupIpcPath(`run-${randomUUID()}`);
+  const runIpcInputDir = path.join(runIpcDir, 'input');
+  const cleanupRunIpc = () => {
+    fs.rmSync(runIpcDir, { recursive: true, force: true });
+  };
+
   const mounts = buildVolumeMounts(
     group,
     input.isMain,
     TWOGATES_ROUTING.mode === 'enabled',
+    runIpcInputDir,
   );
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
@@ -582,6 +600,7 @@ export async function runContainerAgent(
     );
   } catch (err) {
     routingRun.cleanup();
+    cleanupRunIpc();
     throw err;
   }
 
@@ -612,6 +631,7 @@ export async function runContainerAgent(
     fs.mkdirSync(logsDir, { recursive: true });
   } catch (err) {
     routingRun.cleanup();
+    cleanupRunIpc();
     throw err;
   }
 
@@ -622,9 +642,10 @@ export async function runContainerAgent(
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 
-      onProcess(container, containerName);
+      onProcess(container, containerName, runIpcInputDir);
       container.stdin?.once('error', (err) => {
         routingRun.cleanup();
+        cleanupRunIpc();
         container?.kill('SIGKILL');
         reject(err);
       });
@@ -632,12 +653,14 @@ export async function runContainerAgent(
       container.stdin?.end();
     } catch (err) {
       routingRun.cleanup();
+      cleanupRunIpc();
       container?.kill('SIGKILL');
       reject(err);
       return;
     }
     if (!container) {
       routingRun.cleanup();
+      cleanupRunIpc();
       reject(new Error('Container runtime did not return a child process'));
       return;
     }
@@ -761,6 +784,7 @@ export async function runContainerAgent(
     container.on('close', (code) => {
       clearTimeout(timeout);
       routingRun.cleanup();
+      cleanupRunIpc();
       const duration = Date.now() - startTime;
 
       if (timedOut) {

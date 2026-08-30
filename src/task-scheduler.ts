@@ -70,7 +70,7 @@ export interface SchedulerDependencies {
     groupJid: string,
     proc: ChildProcess,
     containerName: string,
-    groupFolder: string,
+    ipcInputDir: string,
   ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
 }
@@ -192,8 +192,8 @@ async function runTask(
         assistantName: ASSISTANT_NAME,
         script: task.script || undefined,
       },
-      (proc, containerName) =>
-        deps.onProcess(queueJid, proc, containerName, task.group_folder),
+      (proc, containerName, ipcInputDir) =>
+        deps.onProcess(queueJid, proc, containerName, ipcInputDir),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;

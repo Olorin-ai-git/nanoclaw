@@ -46,6 +46,7 @@ vi.mock('fs', async () => {
       readdirSync: vi.fn(() => []),
       statSync: vi.fn(() => ({ isDirectory: () => false })),
       copyFileSync: vi.fn(),
+      rmSync: vi.fn(),
     },
   };
 });
@@ -229,5 +230,59 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+
+  it('mounts and cleans a distinct inbound IPC directory for every run', async () => {
+    const fs = await import('fs');
+    const inputDirectories: string[] = [];
+    vi.mocked(fs.default.rmSync).mockClear();
+
+    let markFirstStarted: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const first = runContainerAgent(
+      testGroup,
+      testInput,
+      (_proc, _name, inputDir) => {
+        inputDirectories.push(inputDir);
+        markFirstStarted();
+      },
+    );
+    await firstStarted;
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await first;
+
+    fakeProc = createFakeProcess();
+    let markSecondStarted: () => void;
+    const secondStarted = new Promise<void>((resolve) => {
+      markSecondStarted = resolve;
+    });
+    const second = runContainerAgent(
+      testGroup,
+      testInput,
+      (_proc, _name, inputDir) => {
+        inputDirectories.push(inputDir);
+        markSecondStarted();
+      },
+    );
+    await secondStarted;
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await second;
+
+    expect(inputDirectories).toHaveLength(2);
+    expect(inputDirectories[0]).not.toBe(inputDirectories[1]);
+    expect(
+      inputDirectories.every((directory) => directory.endsWith('/input')),
+    ).toBe(true);
+
+    const removedDirectories = vi
+      .mocked(fs.default.rmSync)
+      .mock.calls.map((call) => String(call[0]));
+    expect(removedDirectories).toEqual(
+      inputDirectories.map((directory) => directory.slice(0, -'/input'.length)),
+    );
   });
 });

@@ -470,8 +470,8 @@ async function runAgent(
         isMain,
         assistantName: ASSISTANT_NAME,
       },
-      (proc, containerName) =>
-        queue.registerProcess(chatJid, proc, containerName, group.folder),
+      (proc, containerName, ipcInputDir) =>
+        queue.registerProcess(chatJid, proc, containerName, ipcInputDir),
       wrappedOnOutput,
     );
 
@@ -794,8 +794,8 @@ async function main(): Promise<void> {
     registeredGroups: () => registeredGroups,
     getSessions: () => sessions,
     queue,
-    onProcess: (groupJid, proc, containerName, groupFolder) =>
-      queue.registerProcess(groupJid, proc, containerName, groupFolder),
+    onProcess: (groupJid, proc, containerName, ipcInputDir) =>
+      queue.registerProcess(groupJid, proc, containerName, ipcInputDir),
     sendMessage: async (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) {
