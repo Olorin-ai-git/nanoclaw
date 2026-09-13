@@ -406,6 +406,40 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(10);
   });
 
+  it('writes same-millisecond follow-ups with distinct chronological filenames', async () => {
+    const fs = await import('fs');
+    let resolveProcess: () => void;
+    queue.setProcessMessagesFn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveProcess = () => resolve(true);
+        }),
+    );
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    queue.registerProcess(
+      'group1@g.us',
+      {} as any,
+      'container-1',
+      'test-group',
+    );
+
+    vi.setSystemTime(new Date('2026-08-30T12:00:00.000Z'));
+    const renameSync = vi.mocked(fs.default.renameSync);
+    renameSync.mockClear();
+
+    expect(queue.sendMessage('group1@g.us', 'first', 'message-1')).toBe(true);
+    expect(queue.sendMessage('group1@g.us', 'second', 'message-2')).toBe(true);
+
+    const destinations = renameSync.mock.calls.map((call) => String(call[1]));
+    expect(destinations).toHaveLength(2);
+    expect(destinations[0]).not.toBe(destinations[1]);
+    expect(destinations[0] < destinations[1]).toBe(true);
+
+    resolveProcess!();
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
   it('sendMessage returns false for task containers so user messages queue up', async () => {
     let resolveTask: () => void;
 

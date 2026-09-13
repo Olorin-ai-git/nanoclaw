@@ -425,30 +425,38 @@ export function getNewMessages(
   if (jids.length === 0) return { messages: [], newTimestamp: lastTimestamp };
 
   const placeholders = jids.map(() => '?').join(',');
+  const cursor = parseMessageCursor(lastTimestamp);
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
   // Subquery takes the N most recent, outer query re-sorts chronologically.
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+      SELECT rowid AS _sequence, id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
              reply_to_message_id, reply_to_message_content, reply_to_sender_name
       FROM messages
-      WHERE timestamp > ? AND chat_jid IN (${placeholders})
+      WHERE (timestamp > ? OR (timestamp = ? AND rowid > ?))
+        AND chat_jid IN (${placeholders})
         AND is_bot_message = 0 AND content NOT LIKE ?
         AND content != '' AND content IS NOT NULL
-      ORDER BY timestamp DESC
+      ORDER BY timestamp DESC, rowid DESC
       LIMIT ?
-    ) ORDER BY timestamp
+    ) ORDER BY timestamp, _sequence
   `;
 
   const rows = db
     .prepare(sql)
-    .all(lastTimestamp, ...jids, `${botPrefix}:%`, limit) as NewMessage[];
+    .all(
+      cursor.timestamp,
+      cursor.timestamp,
+      cursor.sequence,
+      ...jids,
+      `${botPrefix}:%`,
+      limit,
+    ) as StoredMessage[];
 
-  let newTimestamp = lastTimestamp;
-  for (const row of rows) {
-    if (row.timestamp > newTimestamp) newTimestamp = row.timestamp;
-  }
+  const newest = rows.at(-1);
+  const newTimestamp =
+    newest === undefined ? lastTimestamp : messageCursor(newest);
 
   return { messages: rows, newTimestamp };
 }
@@ -459,24 +467,74 @@ export function getMessagesSince(
   botPrefix: string,
   limit: number = 200,
 ): NewMessage[] {
+  const cursor = parseMessageCursor(sinceTimestamp);
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
   // Subquery takes the N most recent, outer query re-sorts chronologically.
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+      SELECT rowid AS _sequence, id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
              reply_to_message_id, reply_to_message_content, reply_to_sender_name
       FROM messages
-      WHERE chat_jid = ? AND timestamp > ?
+      WHERE chat_jid = ?
+        AND (timestamp > ? OR (timestamp = ? AND rowid > ?))
         AND is_bot_message = 0 AND content NOT LIKE ?
         AND content != '' AND content IS NOT NULL
-      ORDER BY timestamp DESC
+      ORDER BY timestamp DESC, rowid DESC
       LIMIT ?
-    ) ORDER BY timestamp
+    ) ORDER BY timestamp, _sequence
   `;
   return db
     .prepare(sql)
-    .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
+    .all(
+      chatJid,
+      cursor.timestamp,
+      cursor.timestamp,
+      cursor.sequence,
+      `${botPrefix}:%`,
+      limit,
+    ) as StoredMessage[];
+}
+
+interface StoredMessage extends NewMessage {
+  _sequence: number;
+}
+
+interface MessageCursor {
+  timestamp: string;
+  sequence: number;
+}
+
+function parseMessageCursor(value: string): MessageCursor {
+  if (!value.startsWith('{')) {
+    return { timestamp: value, sequence: Number.MAX_SAFE_INTEGER };
+  }
+  try {
+    const parsed = JSON.parse(value) as Partial<MessageCursor> & {
+      version?: unknown;
+    };
+    if (
+      parsed.version === 1 &&
+      typeof parsed.timestamp === 'string' &&
+      Number.isSafeInteger(parsed.sequence) &&
+      (parsed.sequence ?? -1) >= 0
+    ) {
+      return {
+        timestamp: parsed.timestamp,
+        sequence: parsed.sequence as number,
+      };
+    }
+  } catch {
+    // A legacy timestamp can legally begin with `{`; treat it as opaque text.
+  }
+  return { timestamp: value, sequence: Number.MAX_SAFE_INTEGER };
+}
+
+export function messageCursor(message: NewMessage): string {
+  const sequence = (message as Partial<StoredMessage>)._sequence;
+  if (!Number.isSafeInteger(sequence) || (sequence ?? -1) < 0)
+    return message.timestamp;
+  return JSON.stringify({ version: 1, timestamp: message.timestamp, sequence });
 }
 
 export function getLastBotMessageTimestamp(
@@ -490,6 +548,22 @@ export function getLastBotMessageTimestamp(
     )
     .get(chatJid, `${botPrefix}:%`) as { ts: string | null } | undefined;
   return row?.ts ?? undefined;
+}
+
+export function getLastBotMessageCursor(
+  chatJid: string,
+  botPrefix: string,
+): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT rowid AS _sequence, id, chat_jid, timestamp
+       FROM messages
+       WHERE chat_jid = ? AND (is_bot_message = 1 OR content LIKE ?)
+       ORDER BY timestamp DESC, rowid DESC
+       LIMIT 1`,
+    )
+    .get(chatJid, `${botPrefix}:%`) as StoredMessage | undefined;
+  return row === undefined ? undefined : messageCursor(row);
 }
 
 export function getMessageContentById(

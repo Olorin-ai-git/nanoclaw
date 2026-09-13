@@ -9,6 +9,7 @@ import {
   getLastBotMessageTimestamp,
   getMessagesSince,
   getNewMessages,
+  messageCursor,
   getTaskById,
   setRegisteredGroup,
   storeChatMetadata,
@@ -393,6 +394,39 @@ describe('getMessagesSince', () => {
     );
     expect(msgs).toHaveLength(0);
   });
+
+  it('returns a late-arriving sibling with the same source timestamp', () => {
+    const timestamp = '2024-03-01T00:00:00.000Z';
+    store({
+      id: 'same-time-first',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'first arrival',
+      timestamp,
+    });
+    const first = getMessagesSince(
+      'group@g.us',
+      '2024-02-01T00:00:00.000Z',
+      'Andy',
+    );
+    const cursor = messageCursor(first.at(-1)!);
+
+    store({
+      id: 'same-time-late',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'late arrival',
+      timestamp,
+    });
+
+    expect(
+      getMessagesSince('group@g.us', cursor, 'Andy').map(
+        (message) => message.id,
+      ),
+    ).toEqual(['same-time-late']);
+  });
 });
 
 // --- getNewMessages ---
@@ -445,7 +479,11 @@ describe('getNewMessages', () => {
     );
     // Excludes bot message, returns 3 user messages
     expect(messages).toHaveLength(3);
-    expect(newTimestamp).toBe('2024-01-01T00:00:04.000Z');
+    expect(newTimestamp).not.toBe('2024-01-01T00:00:00.000Z');
+    expect(
+      getNewMessages(['group1@g.us', 'group2@g.us'], newTimestamp, 'Andy')
+        .messages,
+    ).toHaveLength(0);
   });
 
   it('filters by timestamp', () => {
@@ -463,6 +501,35 @@ describe('getNewMessages', () => {
     const { messages, newTimestamp } = getNewMessages([], '', 'Andy');
     expect(messages).toHaveLength(0);
     expect(newTimestamp).toBe('');
+  });
+
+  it('advances past a late-arriving same-timestamp message exactly once', () => {
+    const initial = getNewMessages(
+      ['group1@g.us', 'group2@g.us'],
+      '2024-01-01T00:00:00.000Z',
+      'Andy',
+    );
+    store({
+      id: 'same-time-late',
+      chat_jid: 'group2@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'late global arrival',
+      timestamp: '2024-01-01T00:00:04.000Z',
+    });
+
+    const late = getNewMessages(
+      ['group1@g.us', 'group2@g.us'],
+      initial.newTimestamp,
+      'Andy',
+    );
+    expect(late.messages.map((message) => message.id)).toEqual([
+      'same-time-late',
+    ]);
+    expect(
+      getNewMessages(['group1@g.us', 'group2@g.us'], late.newTimestamp, 'Andy')
+        .messages,
+    ).toHaveLength(0);
   });
 });
 
@@ -590,7 +657,7 @@ describe('message query LIMIT', () => {
     // Chronological order preserved
     expect(messages[1].timestamp > messages[0].timestamp).toBe(true);
     // newTimestamp reflects latest returned row
-    expect(newTimestamp).toBe('2024-01-01T00:00:10.000Z');
+    expect(newTimestamp).toContain('2024-01-01T00:00:10.000Z');
   });
 
   it('getMessagesSince caps to limit and returns most recent in chronological order', () => {
